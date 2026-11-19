@@ -563,6 +563,38 @@ function makeHead(colorHex){
   scene.add(g);
   return g;
 }
+/* ---------------- floating name labels ----------------
+   Every snake wears its player's name on a small canvas-texture
+   sprite parented to the head group, so the label rides along
+   with the head automatically — and hides on death / returns on
+   respawn because the head group itself is toggled then. The
+   canvas is redrawn ONLY when that snake's name changes. */
+function drawNameText(sp, name){
+  const cv=sp.userData.canvas, ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const txt=String(name||'').slice(0,14);
+  if(txt){
+    let size=36;
+    ctx.font='700 '+size+'px Orbitron, Rubik, sans-serif';
+    while(ctx.measureText(txt).width>232 && size>15){ size-=2; ctx.font='700 '+size+'px Orbitron, Rubik, sans-serif'; }
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.lineJoin='round';
+    ctx.lineWidth=7; ctx.strokeStyle='rgba(2,4,18,0.9)';
+    ctx.strokeText(txt, cv.width/2, cv.height/2+2);
+    ctx.fillStyle='#ffffff';
+    ctx.fillText(txt, cv.width/2, cv.height/2+2);
+  }
+  sp.userData.tex.needsUpdate=true;
+}
+function makeNameLabel(name){
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=64;
+  const tex=new THREE.CanvasTexture(cv);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false}));
+  sp.scale.set(4.4, 1.1, 1);
+  sp.position.set(0, 2.1, 0);   // floats just above the head (+ any hat/ears/halo)
+  sp.userData.canvas=cv; sp.userData.tex=tex;
+  drawNameText(sp, name);
+  return sp;
+}
 function shade(hex, f){ // darken a hex colour by factor f (0..1)
   const c = new THREE.Color(hex);
   return new THREE.Color(c.r*f, c.g*f, c.b*f);
@@ -580,6 +612,9 @@ function createSnake(def, isPlayer){
     mesh: makeSnakeMesh(), glow: makeGlowMesh(), shine: makeShineMesh(), skinDef: null, headGroup: null, aiTarget: null, aiTimer: 0,
   };
   s.headGroup = makeHead(def.color);
+  s.label = makeNameLabel(def.name);
+  s._labelText = def.name;
+  s.headGroup.add(s.label);
   return s;
 }
 function resetSnakePos(s, x, z, angle, len){
@@ -738,6 +773,9 @@ function updateSnakeMesh(s, t){
   s.headGroup.position.set(s.x, 0.55, s.z);
   s.headGroup.rotation.y = -s.angle;
   s.headGroup.scale.setScalar(1 + 0.3*(s.headPulse||0));   // gulp pulse after eating
+  /* name label: redraw the canvas only if this snake's name changed
+     (local name typed at start, remote names arriving in snapshots) */
+  if(s.label && s._labelText!==s.name){ s._labelText=s.name; drawNameText(s.label, s.name); }
 }
 
 /* ---------------- game state ---------------- */
@@ -746,7 +784,7 @@ let elapsed = 0, player = null;
 const bots = [];
 let skinDef = (window.NSR_SKIN_DEF && window.NSR_SKIN_DEF.colors) ? window.NSR_SKIN_DEF : {name:'Emerald', colors:[SKINS[0]], pattern:'solid'};
 let skinColor = skinDef.colors[0];
-let mouseDown = false, keys = {};
+let mouseDown = false, keys = {}, boostBtnHeld = false;
 
 function initSnakes(){
   player = createSnake({name:'YOU', color:skinColor}, true);
@@ -1478,6 +1516,8 @@ window.addEventListener('keydown', e=>{
   if(e.code==='Enter' && (state==='menu'||state==='over')) startGame();
 });
 window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+window.addEventListener('blur', ()=>{ keys={}; mouseDown=false; boostBtnHeld=false; });
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden){ keys={}; mouseDown=false; boostBtnHeld=false; } });
 function keySteer(){
   let dx=0, dz=0;
   if(keys['KeyW']||keys['ArrowUp']) dz-=1;
@@ -1533,8 +1573,8 @@ function joyEnd(e){
 renderer.domElement.addEventListener('touchend', joyEnd);
 renderer.domElement.addEventListener('touchcancel', joyEnd);
 const boostBtn=$('boostBtn');
-const boostOn=e=>{ e.preventDefault(); player.boost=true; };
-const boostOff=e=>{ e.preventDefault(); player.boost=false; };
+const boostOn=e=>{ e.preventDefault(); boostBtnHeld=true; };
+const boostOff=e=>{ e.preventDefault(); boostBtnHeld=false; };
 boostBtn.addEventListener('touchstart', boostOn, {passive:false});
 boostBtn.addEventListener('touchend', boostOff); boostBtn.addEventListener('touchcancel', boostOff);
 boostBtn.addEventListener('mousedown', boostOn); boostBtn.addEventListener('mouseup', boostOff);
@@ -1616,7 +1656,7 @@ function animate(){
   if(state==='playing' && player){
     elapsed+=dt;
     keySteer();
-    player.boost = player.boost || mouseDown || keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
+    player.boost = boostBtnHeld || mouseDown || keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
     if(player.boost && Math.random()<dt*2) sfx.boost();
     if(netMode==='online' && !isHost){
       // ---- CLIENT: predict my own movement; the host decides everything else
@@ -1799,6 +1839,11 @@ window.addEventListener('resize', ()=>{
 /* ---------------- boot ---------------- */
 initSnakes();
 animate();
+/* labels drawn before the Orbitron webfont arrived used a fallback
+   font — redraw them all once the real font is in */
+if(document.fonts && document.fonts.ready){
+  document.fonts.ready.then(()=>{ for(const s of allSnakes()) s._labelText=null; });
+}
 
 /* debug / test handle (harmless in production) */
 window.NEON_SNAKE = {
