@@ -1,0 +1,1823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<title>Neon Snake Rush — 3D Snake Arena</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rubik:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="assets/three.min.js"></script>
+<script src="assets/peerjs.min.js"></script>
+<script src="assets/supabase.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#050510;font-family:'Rubik',system-ui,sans-serif;color:#eaf6ff}
+  #game-container{position:fixed;inset:0}
+  #game-container canvas{display:block;touch-action:none}
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:5;background:radial-gradient(ellipse at center,transparent 52%,rgba(2,2,14,.6) 100%)}
+  .hidden{display:none!important}
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:12px 14px;pointer-events:none;z-index:10}
+  .hud-card{background:rgba(8,12,34,.72);border:1px solid rgba(0,255,200,.35);border-radius:14px;padding:8px 14px;backdrop-filter:blur(6px);box-shadow:0 0 18px rgba(0,255,200,.15)}
+  .hud-card .lbl{font-size:10px;letter-spacing:2px;color:#7ef9d2;text-transform:uppercase}
+  .hud-card .val{font-family:'Orbitron',monospace;font-size:22px;font-weight:900;color:#fff;line-height:1.1}
+  .hud-card .sub{font-size:11px;color:#9fb8d8}
+  #hud-left{display:flex;gap:10px}
+  #hud-right{display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:auto}
+  .icon-btn{pointer-events:auto;background:rgba(8,12,34,.72);border:1px solid rgba(0,255,200,.35);color:#eaf6ff;border-radius:12px;width:42px;height:42px;font-size:19px;cursor:pointer;backdrop-filter:blur(6px)}
+  .icon-btn:active{transform:scale(.92)}
+  #minimap{border-radius:12px;border:1px solid rgba(0,255,200,.35);background:rgba(8,12,34,.72)}
+  /* ---------- Leaderboard ---------- */
+  #board{position:fixed;top:86px;right:14px;width:190px;background:rgba(8,12,34,.72);border:1px solid rgba(255,0,170,.35);border-radius:14px;padding:10px 12px;z-index:10;backdrop-filter:blur(6px)}
+  #board h3{font-family:'Orbitron',monospace;font-size:12px;letter-spacing:2px;color:#ff7ad9;margin-bottom:6px}
+  #board ol{list-style:none}
+  #board li{display:flex;justify-content:space-between;font-size:13px;padding:3px 2px;color:#cfe6ff}
+  #board li.me{color:#39ff6a;font-weight:800}
+  #board li .rank{color:#8fa8c8;width:20px}
+  /* ---------- Overlays ---------- */
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:20;background:radial-gradient(ellipse at center,rgba(10,10,40,.55),rgba(3,3,12,.88));padding:16px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .panel{max-width:560px;width:100%;margin:auto;text-align:center;background:rgba(10,14,40,.85);border:1px solid rgba(0,255,200,.4);border-radius:24px;padding:28px 24px;box-shadow:0 0 60px rgba(0,255,200,.25),inset 0 0 40px rgba(0,255,200,.06)}
+  .panel h1{font-family:'Orbitron',monospace;font-size:clamp(30px,7vw,52px);font-weight:900;letter-spacing:2px;background:linear-gradient(90deg,#39ff6a,#00e5ff,#ff2fb3,#ffd23d);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 30px rgba(0,229,255,.25)}
+  .panel h2{font-family:'Orbitron',monospace;font-size:clamp(24px,6vw,36px);font-weight:900;color:#ff5d7a;letter-spacing:1px}
+  .tagline{color:#9fd8ff;margin:10px 0 4px;font-size:15px}
+  .howto{text-align:left;margin:16px auto 6px;max-width:430px;font-size:14px;line-height:1.75;color:#cfe6ff}
+  .howto b{color:#39ff6a}.howto .k{display:inline-block;background:#1b2447;border:1px solid #3a4a7a;border-radius:6px;padding:0 7px;font-size:12px;font-family:monospace}
+  .skins{display:flex;gap:10px;justify-content:center;margin:16px auto 6px;flex-wrap:wrap;max-width:430px}
+  .skin{width:38px;height:38px;border-radius:50%;border:3px solid transparent;cursor:pointer;box-shadow:0 0 12px currentColor;transition:transform .15s}
+  .skin.sel{border-color:#fff;transform:scale(1.15)}
+  .big-btn{font-family:'Orbitron',monospace;font-size:19px;font-weight:900;letter-spacing:2px;color:#04121a;background:linear-gradient(90deg,#39ff6a,#00e5ff);border:none;border-radius:999px;padding:15px 44px;cursor:pointer;margin-top:18px;box-shadow:0 0 28px rgba(57,255,106,.55)}
+  .big-btn:active{transform:scale(.96)}
+  .ghost-btn{font-family:'Orbitron',monospace;font-size:13px;letter-spacing:1px;color:#9fd8ff;background:transparent;border:1px solid #3a4a7a;border-radius:999px;padding:10px 22px;cursor:pointer;margin-top:12px}
+  .stats{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+  .stat{background:#131a3d;border:1px solid #2c3a6e;border-radius:14px;padding:10px 16px;min-width:96px}
+  .stat .lbl{font-size:10px;letter-spacing:2px;color:#7ef9d2;text-transform:uppercase}
+  .stat .val{font-family:'Orbitron',monospace;font-size:22px;font-weight:900}
+  #newBest{color:#ffd23d;font-weight:800;margin-top:10px;font-size:16px;text-shadow:0 0 14px rgba(255,210,61,.7)}
+  .tiny{font-size:12px;color:#8fa8c8;margin-top:14px}
+  /* ---------- Touch controls ---------- */
+  #boostBtn{position:fixed;right:20px;bottom:34px;width:92px;height:92px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#ff7ad9,#c4007a);border:3px solid rgba(255,255,255,.5);color:#fff;font-family:'Orbitron',monospace;font-weight:900;font-size:15px;z-index:15;display:none;box-shadow:0 0 26px rgba(255,47,179,.6);touch-action:none}
+  #boostBtn:active{transform:scale(.93)}
+  body.touch #boostBtn{display:block}
+  body.touch #board{display:none}
+  #toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;font-family:'Orbitron',monospace;font-size:26px;font-weight:900;color:#ffd23d;text-shadow:0 0 20px rgba(255,210,61,.8);pointer-events:none;opacity:0;transition:opacity .25s}
+  #netStatus{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:11;background:rgba(8,12,34,.8);border:1px solid rgba(0,229,255,.4);border-radius:999px;padding:6px 16px;font-size:13px;font-weight:600;backdrop-filter:blur(6px);white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis}
+  #netStatus.online{border-color:rgba(57,255,106,.6);color:#7dffab}
+  #netStatus.bots{border-color:rgba(255,210,61,.6);color:#ffd23d}
+  /* ---------- Arena badge ---------- */
+  #arenaBadge{position:fixed;top:54px;left:50%;transform:translateX(-50%);z-index:11;background:rgba(8,12,34,.85);border:1px solid rgba(255,210,61,.6);color:#ffd23d;border-radius:999px;padding:6px 16px;font-family:'Orbitron',monospace;font-size:13px;font-weight:700;letter-spacing:1px;backdrop-filter:blur(6px);white-space:nowrap;box-shadow:0 0 16px rgba(255,210,61,.2)}
+  /* ---------- Floating score popups (+10 on eat) ---------- */
+  #popups{position:fixed;inset:0;pointer-events:none;z-index:12;overflow:hidden}
+  .score-pop{position:absolute;transform:translate(-50%,-50%);font-family:'Orbitron',monospace;font-weight:900;font-size:17px;color:#7dffab;text-shadow:0 0 10px rgba(57,255,106,.8),0 2px 4px rgba(0,0,0,.65);animation:popfly .85s ease-out forwards;white-space:nowrap}
+  @keyframes popfly{0%{opacity:0;margin-top:8px}15%{opacity:1}100%{opacity:0;margin-top:-46px}}
+  /* ---------- Floating anywhere-joystick ---------- */
+  #joy{position:fixed;width:124px;height:124px;border-radius:50%;border:2px solid rgba(0,229,255,.55);background:radial-gradient(circle,rgba(10,16,40,.22),rgba(10,16,40,.55));z-index:14;pointer-events:none;transform:translate(-50%,-50%);box-shadow:inset 0 0 18px rgba(0,229,255,.25)}
+  #joyKnob{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#8affc1,#12b76a 60%,#0a7a4a);border:2px solid rgba(255,255,255,.65);transform:translate(-50%,-50%);box-shadow:0 0 14px rgba(57,255,106,.5)}
+  .name-input{font-family:'Rubik',sans-serif;font-size:16px;font-weight:600;text-align:center;color:#eaf6ff;background:#131a3d;border:1px solid #3a4a7a;border-radius:12px;padding:11px 14px;width:min(280px,80%);margin-top:14px;outline:none}
+  .name-input:focus{border-color:#00e5ff;box-shadow:0 0 14px rgba(0,229,255,.4)}
+  .mode-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+  .mode-btn{font-family:'Orbitron',monospace;font-size:14px;font-weight:700;letter-spacing:1px;border-radius:14px;padding:13px 18px;cursor:pointer;border:1px solid #3a4a7a;background:#131a3d;color:#eaf6ff}
+  .mode-btn.primary{background:linear-gradient(90deg,#39ff6a,#00e5ff);color:#04121a;border:none;box-shadow:0 0 22px rgba(57,255,106,.45)}
+  .mode-btn:active{transform:scale(.96)}
+  #mmStatus{margin-top:14px;font-size:14px;line-height:1.6;color:#9fd8ff;min-height:22px}
+  .code-input{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;letter-spacing:6px;text-align:center;text-transform:uppercase;color:#eaf6ff;background:#131a3d;border:1px solid #3a4a7a;border-radius:12px;padding:10px 12px;width:150px;outline:none}
+  .room-code{font-family:'Orbitron',monospace;font-size:40px;font-weight:900;letter-spacing:10px;color:#00e5ff;text-shadow:0 0 22px rgba(0,229,255,.7);margin:8px 0}
+  #lobbyList{list-style:none;text-align:left;max-width:340px;margin:12px auto;font-size:15px;line-height:2}
+  #lobbyList li b{color:#39ff6a}
+  #lobbyList .host-tag{color:#ffd23d;font-size:12px}
+  @media (max-width:640px){#board{display:none}.hud-card .val{font-size:17px}#minimap{display:none}#netStatus{top:104px;font-size:12px;padding:5px 12px}#arenaBadge{top:140px;font-size:12px;padding:5px 12px}}
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+<div id="vignette"></div>
+
+<div id="netStatus" class="hidden"></div>
+<div id="arenaBadge" class="hidden"></div>
+<div id="popups"></div>
+<div id="joy" class="hidden"><div id="joyKnob"></div></div>
+
+<div id="hud" class="hidden">
+  <div id="hud-left">
+    <div class="hud-card"><div class="lbl">Score</div><div class="val" id="hudScore">0</div><div class="sub">orbs <span id="hudOrbs">0</span> · kills <span id="hudKills">0</span></div></div>
+    <div class="hud-card"><div class="lbl">Length</div><div class="val" id="hudLen">12</div><div class="sub">best <span id="hudBest">0</span></div></div>
+    <div class="hud-card"><div class="lbl">Time</div><div class="val" id="hudTime">0:00</div><div class="sub">survive &amp; grow</div></div>
+  </div>
+  <div id="hud-right">
+    <div><button class="icon-btn" id="pauseBtn" title="Pause (P)">⏸</button>
+    <button class="icon-btn" id="muteBtn" title="Sound (M)">🔊</button></div>
+    <canvas id="minimap" width="130" height="130"></canvas>
+  </div>
+</div>
+
+<div id="board" class="hidden">
+  <h3>🏆 LEADERBOARD</h3>
+  <ol id="boardList"></ol>
+</div>
+
+<button id="boostBtn">BOOST</button>
+<div id="toast"></div>
+
+<div id="menu" class="overlay">
+  <div class="panel">
+    <h1>NEON SNAKE RUSH</h1>
+    <p class="tagline">A glowing 3D snake arena. Eat. Grow. Trap. Survive.</p>
+    <div class="howto">
+      🟢 <b>Eat glowing orbs</b> to grow longer &amp; score points.<br>
+      🐍 <b>Steer with your mouse</b> — on mobile, <b>touch anywhere</b>: a <b>floating joystick</b> pops up right under your thumb, drag it to steer. <span class="k">WASD</span>/<span class="k">←↑↓→</span> also work.<br>
+      🏟 <b>Arenas:</b> max <b>10 players per arena</b> — join <b>anytime</b>, even mid-match! If an arena is full, you land in the next one (Arena 2, 3…). Your arena &amp; player count show at the top.<br>
+      🌀 <b>Your own tail is safe</b> — slither straight through it, no crash!<br>
+      ⚡ Hold <span class="k">Space</span>, mouse button or <b>BOOST</b> to sprint — it costs length!<br>
+      💥 Crash into a wall or another snake and your <b>whole body stays behind as food</b> — chunks spread along your full length, and whoever eats them <b>grows fast</b>. Feast on your rivals' remains!<br>
+      🎯 Cut in front of rivals so <b>they</b> crash into <b>you</b> — then feast on their remains!
+    </div>
+    <div class="skins" id="skins"></div>
+    <div class="tiny">Pick your skin — scales, flames, bunny ears, unicorn horns &amp; more! — <b id="skinName" style="color:#7ef9d2">Emerald</b></div>
+    <input class="name-input" id="playerName" maxlength="14" placeholder="Your name (e.g. Sajjad)" autocomplete="off">
+    <div class="mode-row">
+      <button class="mode-btn primary" id="quickBtn">🌐 QUICK MATCH</button>
+      <button class="mode-btn" id="hostBtn">🔑 HOST ROOM</button>
+      <button class="mode-btn" id="botsBtn">🤖 VS BOTS</button>
+    </div>
+    <div class="mode-row" style="margin-top:10px">
+      <input class="code-input" id="roomCodeInput" maxlength="4" placeholder="CODE" autocomplete="off">
+      <button class="mode-btn" id="joinBtn">🚪 JOIN ROOM</button>
+    </div>
+    <div id="mmStatus"></div>
+    <div class="tiny">Quick Match drops you straight into a <b>live arena</b> with real players — join anytime, max 10 per arena, full arenas overflow into the next one. Only if an arena stays empty do bots fill it — and the game will tell you. Best length: <span id="menuBest">0</span> &nbsp;·&nbsp; Best score: <span id="menuBestScore">0</span></div>
+  </div>
+</div>
+
+<div id="lobby" class="overlay hidden">
+  <div class="panel">
+    <h2 style="color:#00e5ff">🌐 ONLINE ROOM</h2>
+    <p class="tagline">Share this code with a friend — they join from the menu.</p>
+    <div class="room-code" id="lobbyCode">----</div>
+    <ul id="lobbyList"></ul>
+    <p class="tagline" id="lobbyStatus">Waiting for players…</p>
+    <button class="big-btn" id="startBtn">▶ &nbsp;START MATCH</button><br>
+    <button class="ghost-btn" id="cancelLobbyBtn">Cancel</button>
+  </div>
+</div>
+
+<div id="gameover" class="overlay hidden">
+  <div class="panel">
+    <h2 id="goTitle">💥 GAME OVER</h2>
+    <p class="tagline" id="goCause">You crashed!</p>
+    <div id="newBest" class="hidden">🎉 NEW BEST!</div>
+    <div class="stats">
+      <div class="stat"><div class="lbl">Score</div><div class="val" id="goScore">0</div></div>
+      <div class="stat"><div class="lbl">Length</div><div class="val" id="goLen">0</div></div>
+      <div class="stat"><div class="lbl">Kills</div><div class="val" id="goKills">0</div></div>
+      <div class="stat"><div class="lbl">Time</div><div class="val" id="goTime">0:00</div></div>
+    </div>
+    <button class="big-btn" id="againBtn">↻ &nbsp;PLAY AGAIN</button><br>
+    <button class="ghost-btn" id="menuBtn">Back to Menu</button>
+  </div>
+</div>
+
+<div id="paused" class="overlay hidden">
+  <div class="panel">
+    <h2 style="color:#00e5ff">⏸ PAUSED</h2>
+    <p class="tagline">Take a breath, snake. The arena waits.</p>
+    <button class="big-btn" id="resumeBtn">▶ &nbsp;RESUME</button>
+  </div>
+</div>
+
+<script>
+/* Skin picker — standalone so the swatches render even if a game
+   library is slow or blocked. The game script reads
+   window.NSR_SKIN_DEF and exposes window.NSR_setSkin to apply a
+   pick live. Patterns: solid | fade (head->tail gradient) |
+   stripe (bands) | rainbow (animated) | flame (animated flicker) |
+   scale (dragon bands) | scallop (bunny two-tone). Some skins also
+   carry a `decor` head accessory (ears, horns, wings, mane…). */
+(function(){
+  function hx(c){ return '#' + c.toString(16).padStart(6,'0'); }
+  var SKIN_DEFS = [
+    {name:'Emerald',      pattern:'solid',   colors:[0x39ff6a]},
+    {name:'Cyber Cyan',   pattern:'solid',   colors:[0x00e5ff]},
+    {name:'Magenta Pop',  pattern:'solid',   colors:[0xff2fb3]},
+    {name:'Solar Gold',   pattern:'solid',   colors:[0xffd23d]},
+    {name:'Violet Storm', pattern:'solid',   colors:[0x9b5cff]},
+    {name:'Tangerine',    pattern:'solid',   colors:[0xff7a1a]},
+    {name:'Sunset Fade',  pattern:'fade',    colors:[0xff7a1a, 0xff2fb3]},
+    {name:'Ocean Fade',   pattern:'fade',    colors:[0x00e5ff, 0x6a5cff]},
+    {name:'Lagoon Fade',  pattern:'fade',    colors:[0x39ff6a, 0x00b3ff]},
+    {name:'Candy Stripe', pattern:'stripe',  colors:[0xff2fb3, 0xffffff]},
+    {name:'Bumblebee',    pattern:'stripe',  colors:[0xffd23d, 0x23233a]},
+    {name:'Rainbow Rush', pattern:'rainbow', colors:[0xff3355]},
+    {name:'Flame Fury',   pattern:'flame',   colors:[0xff6a00, 0xffb300, 0xff3d00, 0xffd23d], decor:'flame'},
+    {name:'Dragon Scale', pattern:'scale',   colors:[0x2b6bff, 0x7b2fff, 0x19d3ff], decor:'horns'},
+    {name:'Crystal Scale',pattern:'scale',   colors:[0xd9c2ff, 0x9d8cff, 0xbfe3ff], decor:'crystal'},
+    {name:'Bunny Snow',   pattern:'scallop', colors:[0xffffff, 0xdfe8ff], decor:'bunny'},
+    {name:'Kitty Angel',  pattern:'stripe',  colors:[0xbfe9ff, 0xffffff, 0xffd7ec], decor:'angel'},
+    {name:'Unicorn Dream',pattern:'fade',    colors:[0xffffff, 0xff9fdc], decor:'horn'},
+    {name:'Lion King',    pattern:'solid',   colors:[0xe0aa3e], decor:'mane'},
+    {name:'Corgi Pup',    pattern:'fade',    colors:[0xf59a4e, 0xffe3c2], decor:'dogears'},
+  ];
+  function swatchCss(def){
+    if(def.pattern==='rainbow') return 'conic-gradient(#ff3355,#ff7a1a,#ffd23d,#39ff6a,#00e5ff,#9b5cff,#ff3355)';
+    if(def.pattern==='flame') return 'linear-gradient(0deg,#ff3d00,#ff6a00 45%,#ffb300 75%,#ffd23d)';
+    if(def.pattern==='scale'){
+      var sc=''; def.colors.forEach(function(c,i){ sc+=hx(c)+' '+(i*7)+'px '+(i*7+7)+'px,'; });
+      return 'repeating-linear-gradient(45deg,'+sc.slice(0,-1)+')';
+    }
+    if(def.pattern==='scallop') return 'radial-gradient(circle at 50% 32%,'+hx(def.colors[0])+' 58%,'+hx(def.colors[1])+' 60%)';
+    if(def.pattern==='fade') return 'linear-gradient(90deg,'+hx(def.colors[0])+','+hx(def.colors[def.colors.length-1])+')';
+    if(def.pattern==='stripe'){
+      var st=''; def.colors.forEach(function(c,i){ st+=hx(c)+' '+(i*7)+'px '+(i*7+7)+'px,'; });
+      return 'repeating-linear-gradient(45deg,'+st.slice(0,-1)+')';
+    }
+    return hx(def.colors[0]);
+  }
+  window.NSR_SKINS = SKIN_DEFS;
+  window.NSR_SKIN_DEF = SKIN_DEFS[0];
+  window.NSR_SKIN = SKIN_DEFS[0].colors[0];
+  var box = document.getElementById('skins');
+  if(!box) return;
+  SKIN_DEFS.forEach(function(def, i){
+    var d = document.createElement('div');
+    d.className = 'skin' + (i===0 ? ' sel' : '');
+    d.setAttribute('role','button');
+    d.setAttribute('aria-label','Skin: ' + def.name);
+    d.title = def.name;
+    d.style.background = swatchCss(def);
+    d.style.color = hx(def.colors[0]);
+    d.addEventListener('click', function(){
+      window.NSR_SKIN_DEF = def;
+      window.NSR_SKIN = def.colors[0];
+      var all = box.querySelectorAll('.skin');
+      for(var j=0;j<all.length;j++) all[j].classList.remove('sel');
+      d.classList.add('sel');
+      var lbl = document.getElementById('skinName');
+      if(lbl) lbl.textContent = def.name;
+      if(typeof window.NSR_setSkin === 'function') window.NSR_setSkin(def);
+    });
+    box.appendChild(d);
+  });
+})();
+</script>
+<script>
+/* ============================================================
+   NEON SNAKE RUSH — a Snake.io-style 3D arena game
+   (original game inspired by the Snake.io genre:
+    eat orbs, grow, boost costs length, crash = your whole body
+    stays behind as food chunks along your full length and whoever
+    eats them grows, trap rivals, climb the leaderboard)
+   MULTIPLAYER: real players first via Supabase queue
+   (`snake_queue` — see snake_queue.sql) + PeerJS rooms,
+   host-authoritative snapshots. Bots ONLY fill in when no real
+   player is found within ~25s, or the cloud is unreachable —
+   and the game always says so plainly.
+   ARENAS: max 10 real players per arena/scene. Quick Match
+   drops you into a live arena ANY time (mid-match late join);
+   when an arena is full the next player opens/joins Arena 2,
+   3, … The arena number + live player count show on screen.
+   CONTROLS (mobile): floating anywhere-joystick — touch
+   anywhere and a joystick appears right there; drag to steer.
+   ORBS: a balanced count of plain glossy beads (no halo glow);
+   each eaten orb is replaced so the arena never runs dry, and
+   eating gives a gulp pulse, a +score popup and visible growth.
+   ============================================================ */
+const ARENA_R = 60;
+const ORB_TARGET = 120;
+const ARENA_MAX = 10;         // max REAL players per arena/scene
+const BOT_COUNT = 7;
+const SPACING = 0.9;          // distance between body segments
+const MAX_SEG = 140;          // instanced mesh capacity per snake
+const SKINS = [0x39ff6a, 0x00e5ff, 0xff2fb3, 0xffd23d, 0x9b5cff, 0xff7a1a];
+const BOT_DEFS = [
+  {name:'Viper', color:0xff4757}, {name:'Zara', color:0xffd23d},
+  {name:'Blaze', color:0xff7a1a}, {name:'Nova', color:0x9b5cff},
+  {name:'Pixel', color:0x00e5ff}, {name:'Turbo', color:0xff2fb3},
+  {name:'Cobra', color:0x7CFC00},
+];
+const $ = id => document.getElementById(id);
+/* Player names come from other people (PeerJS / queue rows) — always
+   escape them before they touch innerHTML. */
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const rand = (a,b)=>a+Math.random()*(b-a);
+const TAU = Math.PI*2;
+function angDiff(a,b){ let d=(b-a)%TAU; if(d>Math.PI)d-=TAU; if(d<-Math.PI)d+=TAU; return d; }
+function fmtTime(s){ s=Math.floor(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+/* ---------------- storage (best scores) ---------------- */
+const store = {
+  get(k,d){ try{ const v=localStorage.getItem(k); return v===null?d:JSON.parse(v); }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+};
+let bestLen = store.get('neonSnakeRushBestLen',0);
+let bestScore = store.get('neonSnakeRushBestScore',0);
+
+/* ---------------- audio (WebAudio, no files) ---------------- */
+let audioCtx=null, muted = store.get('neonSnakeRushMuted',false);
+function ac(){ if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); return audioCtx; }
+function tone(freq,dur,type='sine',vol=0.12,slideTo=null,delay=0){
+  if(muted) return; const c=ac(); if(!c) return;
+  const t=c.currentTime+delay, o=c.createOscillator(), g=c.createGain();
+  o.type=type; o.frequency.setValueAtTime(freq,t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(g); g.connect(c.destination); o.start(t); o.stop(t+dur+0.02);
+}
+const sfx = {
+  eat(combo){ tone(520+Math.min(combo,12)*35, 0.09, 'sine', 0.14, 880); },
+  big(){ tone(660,0.14,'triangle',0.16,1320); tone(990,0.12,'sine',0.10,1480,0.05); },
+  die(){ tone(420,0.5,'sawtooth',0.16,60); tone(210,0.6,'square',0.10,40,0.08); },
+  botDie(){ tone(300,0.25,'sawtooth',0.10,90); },
+  click(){ tone(700,0.06,'triangle',0.10); },
+  start(){ tone(392,0.1,'triangle',0.12); tone(523,0.1,'triangle',0.12,null,0.09); tone(784,0.16,'triangle',0.14,null,0.18); },
+  boost(){ tone(220,0.18,'sawtooth',0.05,520); },
+};
+
+/* ---------------- three.js scene ---------------- */
+const container = $('game-container');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070718);
+scene.fog = new THREE.FogExp2(0x070718, 0.010);
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth/window.innerHeight, 0.1, 400);
+camera.position.set(0, 28, 16);
+
+scene.add(new THREE.AmbientLight(0x8899ff, 0.7));
+const hemi = new THREE.HemisphereLight(0x88aaff, 0x221133, 0.7); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 0.9); dir.position.set(30,60,20); scene.add(dir);
+const headLight = new THREE.PointLight(0x39ff6a, 0.5, 18, 1.6); headLight.position.set(0,3,0); scene.add(headLight);
+
+/* soft radial glow texture (floor shading, head glow sprites) */
+function radialGlowTexture(inner, outer){
+  const cv=document.createElement('canvas'); cv.width=cv.height=256;
+  const ctx=cv.getContext('2d');
+  const g=ctx.createRadialGradient(128,128,0,128,128,128);
+  g.addColorStop(0, inner); g.addColorStop(1, outer);
+  ctx.fillStyle=g; ctx.fillRect(0,0,256,256);
+  return new THREE.CanvasTexture(cv);
+}
+const glowTex = radialGlowTexture('rgba(255,255,255,1)','rgba(255,255,255,0)');
+
+/* arena floor + grid + neon wall */
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(ARENA_R+42, 72),
+  new THREE.MeshStandardMaterial({map:radialGlowTexture('#1d2c68','#05050f'), roughness:0.85, metalness:0.2})
+);
+floor.rotation.x = -Math.PI/2; scene.add(floor);
+const grid = new THREE.GridHelper((ARENA_R+42)*2, 70, 0x00e5ff, 0x18204a);
+grid.position.y = 0.02; grid.material.transparent = true; grid.material.opacity = 0.35; scene.add(grid);
+const wallRing = new THREE.Mesh(
+  new THREE.TorusGeometry(ARENA_R, 0.45, 12, 128),
+  new THREE.MeshBasicMaterial({color:0x00e5ff})
+);
+wallRing.rotation.x = Math.PI/2; wallRing.position.y = 0.6; scene.add(wallRing);
+const wallCyl = new THREE.Mesh(
+  new THREE.CylinderGeometry(ARENA_R, ARENA_R, 4, 96, 1, true),
+  new THREE.MeshBasicMaterial({color:0x00e5ff, transparent:true, opacity:0.13, side:THREE.DoubleSide})
+);
+wallCyl.position.y = 2; scene.add(wallCyl);
+const wallRing2 = new THREE.Mesh(
+  new THREE.TorusGeometry(ARENA_R+1.6, 0.18, 8, 128),
+  new THREE.MeshBasicMaterial({color:0xff2fb3})
+);
+wallRing2.rotation.x = Math.PI/2; wallRing2.position.y = 0.25; scene.add(wallRing2);
+
+/* glowing guide rings painted on the floor */
+[[20,0x39ff6a],[38,0xff2fb3],[52,0x00e5ff]].forEach(function(rc){
+  const ring=new THREE.Mesh(new THREE.RingGeometry(rc[0]-0.14, rc[0]+0.14, 96),
+    new THREE.MeshBasicMaterial({color:rc[1], transparent:true, opacity:0.32, side:THREE.DoubleSide}));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.03; scene.add(ring);
+});
+/* neon pillars ringing the arena, with glowing tips */
+for(let i=0;i<12;i++){
+  const a=(i/12)*TAU, px=Math.cos(a)*(ARENA_R+13), pz=Math.sin(a)*(ARENA_R+13);
+  const h=6+((i*37)%8);
+  const pil=new THREE.Mesh(new THREE.BoxGeometry(1.6,h,1.6),
+    new THREE.MeshBasicMaterial({color: i%2? 0x14406e : 0x40166b}));
+  pil.position.set(px,h/2,pz); scene.add(pil);
+  const tip=new THREE.Mesh(new THREE.SphereGeometry(0.55,10,8),
+    new THREE.MeshBasicMaterial({color: i%2? 0x00e5ff : 0xff2fb3}));
+  tip.position.set(px,h+0.6,pz); scene.add(tip);
+}
+/* starfield sky */
+(function addStars(){
+  const n=420, pos=new Float32Array(n*3);
+  for(let i=0;i<n;i++){ const a=Math.random()*TAU, r=120+Math.random()*180;
+    pos[i*3]=Math.cos(a)*r; pos[i*3+1]=18+Math.random()*130; pos[i*3+2]=Math.sin(a)*r; }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({color:0xaaccff, size:1.6, sizeAttenuation:false, transparent:true, opacity:0.85, fog:false})));
+})();
+
+/* floating dust particles */
+(function addDust(){
+  const n=320, pos=new Float32Array(n*3);
+  for(let i=0;i<n;i++){ const a=Math.random()*TAU, r=Math.random()*(ARENA_R+30);
+    pos[i*3]=Math.cos(a)*r; pos[i*3+1]=rand(0.5,14); pos[i*3+2]=Math.sin(a)*r; }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({color:0x66ccff, size:0.35, transparent:true, opacity:0.7})));
+})();
+
+/* burst rings (eat / death effects) */
+const bursts=[];
+(function(){
+  const geo=new THREE.RingGeometry(0.4,0.7,32);
+  for(let i=0;i<10;i++){
+    const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0, side:THREE.DoubleSide}));
+    m.rotation.x=-Math.PI/2; m.visible=false; scene.add(m); bursts.push({mesh:m, life:0});
+  }
+})();
+function burst(x,z,color,scale=1){
+  const b=bursts.find(b=>b.life<=0); if(!b) return;
+  b.mesh.position.set(x,0.3,z); b.mesh.material.color.setHex(color);
+  b.mesh.scale.setScalar(0.5*scale); b.life=1; b.mesh.visible=true;
+}
+/* boost / eat spark particles */
+const PMAX=240;
+const pMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 6, 5),
+  new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false}), PMAX);
+pMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+pMesh.frustumCulled=false; pMesh.count=0;
+scene.add(pMesh);
+const parts=[];
+function emitPart(x,y,z,color){
+  if(parts.length>=PMAX) parts.shift();
+  parts.push({x,y,z, vx:rand(-1.6,1.6), vy:rand(0.6,2.4), vz:rand(-1.6,1.6), life:rand(0.35,0.6), max:0.6, color});
+}
+function updateParts(dt){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i]; p.life-=dt;
+    if(p.life<=0){ parts.splice(i,1); continue; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.z+=p.vz*dt; p.vy-=3*dt;
+  }
+  for(let i=0;i<parts.length;i++){
+    const p=parts[i];
+    _v.set(p.x,p.y,p.z); _s.setScalar(Math.max(0.15, p.life/p.max*1.6));
+    _m4.compose(_v,_q,_s); pMesh.setMatrixAt(i,_m4);
+    _c.setHex(p.color); pMesh.setColorAt(i,_c);
+  }
+  pMesh.count=parts.length;
+  pMesh.instanceMatrix.needsUpdate=true;
+  if(pMesh.instanceColor) pMesh.instanceColor.needsUpdate=true;
+}
+/* ---------------- orbs ---------------- */
+const ORB_COLORS = [0x39ff6a, 0x00e5ff, 0xff2fb3, 0xffd23d, 0x9b5cff, 0xff7a1a, 0xffffff];
+const orbGeo = new THREE.SphereGeometry(0.42, 14, 10);
+/* plain glossy beads — lit by the scene lights like real marbles,
+   no neon halo shell (kept subtle on purpose so eating stays fun) */
+const orbMat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.3, metalness:0.15});
+const orbMesh = new THREE.InstancedMesh(orbGeo, orbMat, 720);
+orbMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+orbMesh.frustumCulled = false;
+scene.add(orbMesh);
+const orbs = [];   // {x,z,value,color,phase,size}
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
+function spawnOrb(x, z, value, isFood){
+  if(orbs.length >= 680) return;
+  const v = value || (Math.random()<0.82 ? 1 : Math.random()<0.7 ? 3 : 5);
+  const px = x!==undefined ? x : rand(-ARENA_R+3, ARENA_R-3);
+  const pz = z!==undefined ? z : rand(-ARENA_R+3, ARENA_R-3);
+  if(Math.hypot(px,pz) > ARENA_R-2) return spawnOrb(undefined,undefined,v);
+  const color = v>=5 ? 0xffd23d : ORB_COLORS[Math.floor(Math.random()*ORB_COLORS.length)];
+  /* food=true marks a dead snake's remains: a finite feast — eating
+     one does NOT spawn a replacement orb somewhere else */
+  orbs.push({x:px, z:pz, value:v, color, phase:Math.random()*TAU, size: v>=5?1.5 : v>=3?1.15 : 0.85, food:!!isFood});
+}
+for(let i=0;i<ORB_TARGET;i++) spawnOrb();
+function refreshOrbs(t){
+  for(let i=0;i<orbs.length;i++){
+    const o=orbs[i], pulse = 1 + 0.05*Math.sin(t*2.4 + o.phase);   // gentle, calm
+    _v.set(o.x, 0.5 + 0.06*Math.sin(t*1.8 + o.phase), o.z);
+    _s.setScalar(o.size*pulse);
+    _m4.compose(_v, _q, _s); orbMesh.setMatrixAt(i, _m4);
+    _c.setHex(o.color); orbMesh.setColorAt(i, _c);
+  }
+  orbMesh.count = orbs.length;
+  orbMesh.instanceMatrix.needsUpdate = true;
+  if(orbMesh.instanceColor) orbMesh.instanceColor.needsUpdate = true;
+}
+
+/* ---------------- snakes ---------------- */
+const segGeo = new THREE.SphereGeometry(0.62, 12, 10);
+function makeSnakeMesh(){
+  /* matte, light-shaded body — a solid real snake look, NOT neon:
+     a lit standard material (soft shading, gentle specular) instead
+     of a flat emissive-looking basic material */
+  const mat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.55, metalness:0.05});
+  const im = new THREE.InstancedMesh(segGeo, mat, MAX_SEG);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  im.frustumCulled = false;
+  scene.add(im);
+  return im;
+}
+/* soft aura shell around the body — kept VERY faint on purpose:
+   the snakes must read as solid matte creatures, not neon tubes */
+const glowSegGeo = new THREE.SphereGeometry(0.85, 10, 8);
+function makeGlowMesh(){
+  const im = new THREE.InstancedMesh(glowSegGeo,
+    new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.035, blending:THREE.AdditiveBlending, depthWrite:false}), MAX_SEG);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  im.frustumCulled = false;
+  scene.add(im);
+  return im;
+}
+/* glossy shine spot per segment — makes each bead look polished
+   and 3D instead of a flat orb (Snake.io-style skins) */
+const shineGeo = new THREE.SphereGeometry(0.20, 8, 6);
+function makeShineMesh(){
+  const im = new THREE.InstancedMesh(shineGeo,
+    new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending, depthWrite:false}), MAX_SEG);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  im.frustumCulled = false;
+  scene.add(im);
+  return im;
+}
+function makeHead(colorHex){
+  const g = new THREE.Group();
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.84, 16, 12),
+    new THREE.MeshStandardMaterial({color:colorHex, roughness:0.5, metalness:0.05}));
+  g.add(head);
+  const eyeW = new THREE.MeshBasicMaterial({color:0xffffff});
+  const eyeB = new THREE.MeshBasicMaterial({color:0x111111});
+  for(const s of [-1,1]){
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 8), eyeW);
+    e.position.set(0.47, 0.36, s*0.38); g.add(e);
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), eyeB);
+    p.position.set(0.68, 0.38, s*0.38); g.add(p);
+  }
+  const tongue = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.05,0.08),
+    new THREE.MeshBasicMaterial({color:0xff3355}));
+  tongue.position.set(0.95, -0.05, 0); g.add(tongue);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:colorHex, transparent:true, opacity:0.10, blending:THREE.AdditiveBlending, depthWrite:false}));
+  glow.scale.setScalar(2.4);
+  g.add(glow);
+  g.userData.glow = glow;
+  scene.add(g);
+  return g;
+}
+function shade(hex, f){ // darken a hex colour by factor f (0..1)
+  const c = new THREE.Color(hex);
+  return new THREE.Color(c.r*f, c.g*f, c.b*f);
+}
+function createSnake(def, isPlayer){
+  const s = {
+    name: def.name, colorHex: def.color, isPlayer: !!isPlayer,
+    id: def.id || ('local-'+Math.random().toString(36).slice(2,9)),
+    remote:false, bot:false, netIn:null,
+    snapX:0, snapZ:0, snapA:0,
+    x: 0, z: 0, angle: 0, targetAngle: 0,
+    length: 12, score: 0, kills: 0, orbsEaten: 0, combo: 0,
+    alive: true, respawnIn: 0, boost: false, boostTimer: 0, headPulse: 0,
+    history: [], segPos: [], wander: Math.random()*TAU,
+    mesh: makeSnakeMesh(), glow: makeGlowMesh(), shine: makeShineMesh(), skinDef: null, headGroup: null, aiTarget: null, aiTimer: 0,
+  };
+  s.headGroup = makeHead(def.color);
+  return s;
+}
+function resetSnakePos(s, x, z, angle, len){
+  s.x=x; s.z=z; s.angle=angle; s.targetAngle=angle; s.length=len||12;
+  s.alive=true; s.score=0; s.kills=0; s.orbsEaten=0; s.combo=0; s.boost=false;
+  s.history=[]; s.segPos=[];
+  for(let i=0;i<400;i++) s.history.push({x: x - Math.cos(angle)*i*0.35, z: z - Math.sin(angle)*i*0.35});
+  s.mesh.visible=true; s.headGroup.visible=true;
+  paintSnake(s);
+}
+const _c2 = new THREE.Color(), _tc = new THREE.Color();
+let rainbowOff = 0, rainbowTimer = 0, flameShift = 0;
+/* colour of segment i under the snake's skin — solid / fade / stripe /
+   rainbow / flame (animated flicker) / scale (banded dragon scales) /
+   scallop (soft bunny two-tone) */
+function segColorAt(s, i, out){
+  const def = s.skinDef, t = i/(MAX_SEG-1);
+  if(def && def.pattern==='rainbow'){ out.setHSL((t*1.3 + rainbowOff)%1, 1, 0.56); }
+  else if(def && def.pattern==='flame' && def.colors && def.colors.length>1){
+    out.setHex(def.colors[(i + flameShift) % def.colors.length]);
+    if(i%2) out.multiplyScalar(0.88);   // flicker shading between beads
+  }
+  else if(def && def.pattern==='scale' && def.colors && def.colors.length>1){
+    out.setHex(def.colors[Math.floor(i/2) % def.colors.length]);
+    if(i%2===1) out.multiplyScalar(0.78);   // overlapping-scale shading
+  }
+  else if(def && def.pattern==='scallop' && def.colors && def.colors.length>1){ out.setHex(def.colors[i % def.colors.length]); }
+  else if(def && def.pattern==='fade' && def.colors && def.colors.length>1){ out.setHex(def.colors[0]).lerp(_c2.setHex(def.colors[1]), t); }
+  else if(def && def.pattern==='stripe' && def.colors && def.colors.length>1){
+    if(def.colors.length>2) out.setHex(def.colors[Math.floor(i/2) % def.colors.length]);
+    else out.setHex(def.colors[(Math.floor(i/3)%2===0) ? 0 : 1]);
+  }
+  else out.setHex(s.colorHex);
+  return out;
+}
+/* Cute head accessories per skin (Snake.io-style characters):
+   bunny ears, unicorn horn, angel wings + halo, lion mane, dragon
+   horns, crystal gem, corgi ears, flame tuft. Built from simple
+   shapes in head-local space (forward = +x, up = +y). */
+function applyDecor(s){
+  const hg = s.headGroup; if(!hg) return;
+  if(hg.userData.decor){ hg.remove(hg.userData.decor); hg.userData.decor = null; }
+  const kind = s.skinDef && s.skinDef.decor;
+  if(!kind) return;
+  const g = new THREE.Group();
+  const M = hex => new THREE.MeshBasicMaterial({color:hex});
+  const ball = (hex, r, x, y, z, sx, sy, sz) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), M(hex));
+    m.position.set(x, y, z); if(sx) m.scale.set(sx, sy, sz); g.add(m); return m;
+  };
+  const cone = (hex, r, h, x, y, z, rz, rx) => {
+    const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 10), M(hex));
+    m.position.set(x, y, z); if(rz) m.rotation.z = rz; if(rx) m.rotation.x = rx; g.add(m); return m;
+  };
+  if(kind==='bunny'){
+    for(const sd of [-1,1]){
+      const ear = ball(0xffffff, 0.30, -0.05, 1.08, sd*0.30, 0.38, 1.3, 0.20); ear.rotation.x = sd*0.18;
+      const inner = ball(0xff9fc6, 0.30, 0.05, 1.05, sd*0.30, 0.20, 0.9, 0.10); inner.rotation.x = sd*0.18;
+    }
+  } else if(kind==='horn'){           // unicorn: gold horn + pink mane tufts
+    cone(0xffd23d, 0.17, 0.78, 0.30, 0.95, 0, -0.32, 0);
+    ball(0xff9fdc, 0.20, -0.18, 0.88, 0, 0.8, 1.0, 0.8);
+    ball(0xff6fc4, 0.17, -0.42, 0.78, 0, 0.8, 1.0, 0.8);
+    ball(0xffc2e8, 0.14, -0.62, 0.64, 0, 0.8, 1.0, 0.8);
+  } else if(kind==='horns'){          // dragon horns
+    for(const sd of [-1,1]) cone(0xbfe3ff, 0.16, 0.58, -0.05, 0.85, sd*0.44, 0.15, sd*0.55);
+    cone(0x19d3ff, 0.12, 0.4, -0.35, 0.72, 0, 0.5, 0);
+  } else if(kind==='crystal'){
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.32), M(0xc9a7ff));
+    gem.position.set(0, 1.02, 0); g.add(gem);
+    ball(0xffffff, 0.10, 0.10, 1.14, 0.10, 1, 1, 1);
+  } else if(kind==='angel'){          // kitty ears + wings + halo
+    for(const sd of [-1,1]){
+      cone(0xffffff, 0.21, 0.44, 0.02, 0.82, sd*0.42, 0, sd*0.28);
+      const wing = ball(0xffe9a8, 0.34, -0.48, 0.45, sd*0.78, 1.5, 0.75, 0.22); wing.rotation.x = sd*0.35;
+    }
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.40, 0.055, 8, 24), M(0xffd23d));
+    halo.position.set(0, 1.22, 0); halo.rotation.x = Math.PI/2; g.add(halo);
+  } else if(kind==='mane'){           // lion mane ring
+    for(let k=0;k<9;k++){
+      const a = (k/9)*Math.PI*2;
+      ball(k%2 ? 0xb5651d : 0x8a4b12, 0.33, -0.10, Math.cos(a)*0.66, Math.sin(a)*0.66, 1, 1, 1);
+    }
+  } else if(kind==='dogears'){        // corgi floppy ears
+    for(const sd of [-1,1]){
+      const ear = ball(0xc7742c, 0.30, -0.02, 0.34, sd*0.74, 0.55, 0.85, 0.24); ear.rotation.x = sd*0.25;
+      cone(0xffe3c2, 0.16, 0.34, 0.10, 0.86, sd*0.30, 0, sd*0.3);
+    }
+  } else if(kind==='flame'){          // flame tuft on top
+    cone(0xff6a00, 0.23, 0.85, -0.05, 1.10, 0, 0.08, 0);
+    cone(0xffd23d, 0.16, 0.58, -0.02, 1.02, 0.24, 0, 0.3);
+    cone(0xff3d00, 0.15, 0.52, -0.02, 1.0, -0.24, 0, -0.3);
+    cone(0xffb300, 0.13, 0.45, 0.28, 0.95, 0, -0.4, 0);
+  }
+  hg.add(g); hg.userData.decor = g;
+}
+function paintSnake(s){
+  const wantDecor = (s.skinDef && s.skinDef.decor) || null;
+  if(s._decorKey !== wantDecor){ s._decorKey = wantDecor; applyDecor(s); }
+  for(let i=0;i<MAX_SEG;i++){
+    segColorAt(s, i, _tc);
+    const f = 1 - (i/MAX_SEG)*0.55;           // head bright -> tail deeper
+    _tc.multiplyScalar(Math.max(f,0.35));
+    s.mesh.setColorAt(i,_tc);
+    s.glow.setColorAt(i,_tc);
+  }
+  if(s.mesh.instanceColor) s.mesh.instanceColor.needsUpdate=true;
+  if(s.glow.instanceColor) s.glow.instanceColor.needsUpdate=true;
+  segColorAt(s, 0, _tc);
+  s.headGroup.children[0].material.color.copy(_tc);
+  if(s.headGroup.userData.glow) s.headGroup.userData.glow.material.color.copy(_tc);
+  if(s.isPlayer) headLight.color.copy(_tc);
+}
+function segCount(s){ return Math.max(3, Math.min(MAX_SEG, Math.floor(s.length))); }
+/* world position of the point `dist` behind the head along the path */
+function pointAtDistance(s, dist){
+  let acc=0;
+  for(let i=0;i<s.history.length-1;i++){
+    const a=s.history[i], b=s.history[i+1];
+    const d=Math.hypot(b.x-a.x, b.z-a.z);
+    if(acc+d>=dist){
+      const t = d===0?0:(dist-acc)/d;
+      return {x:a.x+(b.x-a.x)*t, z:a.z+(b.z-a.z)*t};
+    }
+    acc+=d;
+  }
+  const last=s.history[s.history.length-1];
+  return {x:last.x, z:last.z};
+}
+function updateSnakeMesh(s, t){
+  const n = segCount(s);
+  s.segPos.length = 0;
+  for(let i=0;i<n;i++){
+    const p = pointAtDistance(s, i*SPACING);
+    s.segPos.push(p);
+    const wob = 1 + 0.06*Math.sin(t*6 - i*0.55);   // slither shimmer
+    const taper = 1 - (i/Math.max(1,n-1))*0.38;    // body thins toward the tail
+    const sc = (i===0?1.05*(1+0.35*(s.headPulse||0)):1)*wob*taper;
+    _v.set(p.x, 0.55, p.z);
+    _s.setScalar(sc);
+    _m4.compose(_v, _q, _s); s.mesh.setMatrixAt(i,_m4);
+    _s.setScalar(1.55*wob*taper);
+    _m4.compose(_v, _q, _s); s.glow.setMatrixAt(i,_m4);
+    /* gloss spot riding on the upper-front of the bead — offset far
+       enough to poke past the body surface so it actually shows */
+    _v.set(p.x, 0.55 + 0.46*sc, p.z - 0.15*sc);
+    _s.setScalar(sc*0.95);
+    _m4.compose(_v, _q, _s); s.shine.setMatrixAt(i,_m4);
+  }
+  s.mesh.count = n;
+  s.mesh.instanceMatrix.needsUpdate = true;
+  s.glow.count = n;
+  s.glow.instanceMatrix.needsUpdate = true;
+  s.shine.count = n;
+  s.shine.instanceMatrix.needsUpdate = true;
+  s.headGroup.position.set(s.x, 0.55, s.z);
+  s.headGroup.rotation.y = -s.angle;
+  s.headGroup.scale.setScalar(1 + 0.3*(s.headPulse||0));   // gulp pulse after eating
+}
+
+/* ---------------- game state ---------------- */
+let state = 'menu';           // menu | playing | paused | over
+let elapsed = 0, player = null;
+const bots = [];
+let skinDef = (window.NSR_SKIN_DEF && window.NSR_SKIN_DEF.colors) ? window.NSR_SKIN_DEF : {name:'Emerald', colors:[SKINS[0]], pattern:'solid'};
+let skinColor = skinDef.colors[0];
+let mouseDown = false, keys = {};
+
+function initSnakes(){
+  player = createSnake({name:'YOU', color:skinColor}, true);
+  player.skinDef = skinDef;
+  resetSnakePos(player, 0, 18, -Math.PI/2, 12);
+  bots.length = 0;
+  const ALL_SKINS = (window.NSR_SKINS && window.NSR_SKINS.length) ? window.NSR_SKINS : null;
+  const BOT_SKIN_NAMES = ['Dragon Scale','Kitty Angel','Flame Fury','Crystal Scale','Rainbow Rush','Bumblebee','Lion King'];
+  BOT_DEFS.forEach((d,i)=>{
+    const b = createSnake(d, false);
+    b.bot = true;
+    if(ALL_SKINS){   // bots wear the fancy skins too — the arena looks alive
+      const def = ALL_SKINS.find(x=>x.name===BOT_SKIN_NAMES[i % BOT_SKIN_NAMES.length]);
+      if(def){ b.skinDef = def; b.colorHex = def.colors[0]; }
+    }
+    const a = (i/BOT_COUNT)*TAU + 0.4;
+    resetSnakePos(b, Math.cos(a)*(ARENA_R-14), Math.sin(a)*(ARENA_R-14), a+Math.PI, rand(14,26));
+    b.score = Math.floor(b.length*10);
+    bots.push(b);
+  });
+}
+function allSnakes(){ return player ? [player, ...bots, ...remotes] : [...bots, ...remotes]; }
+
+/* ---------------- death / respawn ---------------- */
+/* Snake.io-style death: the WHOLE body stays behind as food.
+   Every segment the snake occupied at the moment of death drops
+   as a meat chunk laid out along its full path — head to tail,
+   covering the entire area it was spread over. Whoever eats the
+   chunks grows by them, so a long snake leaves a long feast. */
+function dropBodyFood(s){
+  const pts = (s.segPos && s.segPos.length) ? s.segPos : null;
+  const n = pts ? pts.length : Math.max(3, Math.floor(s.length));
+  for(let i=0;i<n;i++){
+    const p = pts ? pts[i] : pointAtDistance(s, i*SPACING);
+    if(Math.hypot(p.x, p.z) > ARENA_R-2.2) continue;   // never outside the wall
+    // richer chunks toward the head half, plain ones along the tail
+    const v = i%3===0 ? 3 : 1;
+    spawnOrb(p.x + rand(-0.35,0.35), p.z + rand(-0.35,0.35), v, true);
+  }
+}
+function killSnake(s, cause){
+  if(!s.alive) return;
+  // On an online client, deaths are decided by the host and arrive via
+  // snapshot — never simulate them locally (their orbs already came in it).
+  if(s.remote && netMode==='online' && !isHost){
+    s.alive=false; s.mesh.visible=false; s.headGroup.visible=false;
+    return;
+  }
+  s.alive=false; s.mesh.visible=false; s.headGroup.visible=false;
+  dropBodyFood(s);
+  burst(s.x, s.z, s.colorHex, 2.2);
+  if(netMode==='online' && isHost){
+    pendingDeaths.push({id:s.id, cause:cause||'snake'});
+    if(!s.isPlayer){
+      // credit the killer: 'YOU' = the host; otherwise find the remote by name
+      const killer = cause==='YOU' ? player : allSnakes().find(o=>o.name===cause);
+      if(killer && killer.remote) netSendTo(killer.id, {t:'kill', killer:killer.id, victimName:s.name});
+    }
+  }
+  if(s.isPlayer){
+    state='over'; sfx.die();
+    const isBestLen = s.length>bestLen, isBestScore = s.score>bestScore;
+    if(isBestLen){ bestLen=Math.floor(s.length); store.set('neonSnakeRushBestLen',bestLen); }
+    if(isBestScore){ bestScore=s.score; store.set('neonSnakeRushBestScore',bestScore); }
+    $('goScore').textContent=s.score; $('goLen').textContent=Math.floor(s.length);
+    $('goKills').textContent=s.kills; $('goTime').textContent=fmtTime(elapsed);
+    $('goCause').textContent = cause==='wall'
+      ? 'You smashed into the neon wall!'
+      : 'You crashed into ' + (cause||'another snake') + '!';
+    $('newBest').classList.toggle('hidden', !(isBestLen||isBestScore));
+    if(netMode==='online' && isHost) netSendAll({t:'end'});
+    setTimeout(()=>{ $('gameover').classList.remove('hidden'); $('hud').classList.add('hidden'); $('board').classList.add('hidden'); }, 650);
+  } else {
+    sfx.botDie();
+    if(s.bot) s.respawnIn=3;   // bots respawn; real players stay out
+    if(cause==='YOU'){
+      player.kills++; player.score+=25; toast('💥 +25  You killed '+s.name+'!');
+    }
+  }
+}
+function respawnBot(b){
+  const a=Math.random()*TAU;
+  resetSnakePos(b, Math.cos(a)*(ARENA_R-10), Math.sin(a)*(ARENA_R-10), a+Math.PI, rand(10,18));
+  b.score=Math.floor(b.length*10);
+}
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.style.opacity=1;
+  clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.opacity=0, 1400);
+}
+/* floating "+10" above the player's head — the tasty part of eating */
+function spawnScorePop(txt){
+  const layer=$('popups');
+  if(!layer || !player) return;
+  if(layer.children.length>=6) layer.removeChild(layer.firstChild);
+  _v.set(player.x, 1.6, player.z).project(camera);
+  if(_v.z>1) return;
+  const d=document.createElement('div');
+  d.className='score-pop'; d.textContent=txt;
+  d.style.left=((_v.x*0.5+0.5)*window.innerWidth + rand(-16,16))+'px';
+  d.style.top=((-_v.y*0.5+0.5)*window.innerHeight)+'px';
+  layer.appendChild(d);
+  setTimeout(()=>{ if(d.parentNode) d.parentNode.removeChild(d); }, 880);
+}
+
+/* ============================================================
+   ONLINE MULTIPLAYER — real players first, bots only as fallback
+   Same free route as Cube Strike Online:
+   - Supabase project "WeekendTrend" (gnzhaebfqhlfenrwhjjg) queue table
+     `snake_queue` for matchmaking (see snake_queue.sql — run it once in
+     the Supabase SQL editor; same columns/RLS as cube_strike_queue).
+   - PeerJS rooms (free PeerJS cloud broker, no server) for gameplay.
+   - Host-authoritative: the host simulates every snake + orbs and
+     broadcasts snapshots 10x/sec; clients send steering input and
+     predict only their own snake locally, host corrects them.
+   - Quick Match searches ~25s for a real player. NOBODY found ->
+     bots fill the arena and the game SAYS SO plainly.
+   - Supabase unreachable / queue table missing -> bots + the reason.
+   ============================================================ */
+const SB_URL = 'https://gnzhaebfqhlfenrwhjjg.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduemhhZWJmcWhsZmVucndoampnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQwNzExNjQsImV4cCI6MjEwOTY0NzE2NH0.C5NdupLRkyDiqdM9k8cI7ThZM8Rk86goDss8hqoTRc4';
+let sb = null;
+try{ if(window.supabase && window.supabase.createClient) sb = window.supabase.createClient(SB_URL, SB_ANON); }catch(e){ sb = null; }
+
+let netMode = 'offline';        // 'offline' (bots) | 'online' (real players)
+let isHost = false;
+let arenaNo = 1;                // which arena/scene I am in (1, 2, 3, …)
+let arenaCountFromHost = 0;     // client: real-player count from host snapshots
+const arenaFullCodes = {};      // room codes known full/unreachable this session
+let myName = 'Player';
+let myId = 'me';
+const remotes = [];             // real-player snakes (not bots, not AI)
+let peer = null, hostConn = null;
+const conns = {};               // host: peerId -> DataConnection
+let lobbyPlayers = [];          // [{id,name,color,host}]
+let netTick = 0, snapTimer = 0, inputTimer = 0, lastSnapAt = 0;
+let pendingDeaths = [];         // host: [{id, cause}] since last snapshot
+let quickMatchHost = false, quickAutoJoin = false, quickJoinRetries = 0;
+let qmTimers = [];
+const qm = { searching:false, rowId:null, poll:null, startedAt:0, claimed:false, phase:'' };
+
+function setNetStatus(text, kind){
+  const el=$('netStatus');
+  if(!text){ el.classList.add('hidden'); return; }
+  el.textContent=text; el.classList.remove('hidden');
+  el.classList.toggle('online', kind==='online');
+  el.classList.toggle('bots', kind==='bots');
+}
+function mmStatus(t){ const el=$('mmStatus'); if(el) el.innerHTML=t||''; }
+function readName(){
+  const v=($('playerName').value||'').trim();
+  myName = v ? v.slice(0,14) : 'Player'+Math.floor(Math.random()*90+10);
+}
+function genCode(){
+  const L='ABCDEFGHJKMNPQRSTUVWXYZ'; let s='';
+  for(let i=0;i<4;i++) s+=L[Math.floor(Math.random()*L.length)];
+  return s;
+}
+function netPlayerId(){
+  let tab=null;
+  try{ tab=sessionStorage.getItem('nsr_tab_id'); if(!tab){ tab='tab'+Math.random().toString(36).slice(2,10); sessionStorage.setItem('nsr_tab_id',tab); } }catch(e){ tab='tab'+Math.random().toString(36).slice(2,10); }
+  let dev='dev';
+  try{ dev=localStorage.getItem('nsr_device_id')||('dev'+Math.random().toString(36).slice(2,10)); localStorage.setItem('nsr_device_id',dev); }catch(e){}
+  return dev+':'+tab;
+}
+function qmRowId(){ return 'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function qmClearTimers(){ qmTimers.forEach(t=>{ clearTimeout(t); clearInterval(t); }); qmTimers=[]; }
+function qmDeleteRow(){
+  if(!qm.rowId || !sb){ qm.rowId=null; return; }
+  const id=qm.rowId; qm.rowId=null;
+  try{ sb.from('snake_queue').delete().eq('id',id).then(()=>{}); }catch(e){}
+}
+function cancelQuickSearch(){
+  if(qm.poll){ clearInterval(qm.poll); qm.poll=null; }
+  qm.searching=false; qm.claimed=false; qm.phase=''; quickMatchHost=false; quickAutoJoin=false;
+  clearAloneTimer();
+  qmDeleteRow(); qmClearTimers();
+}
+/* close peer connections only — the queue row & search state survive
+   (used when hopping from a full/dead arena to the next one) */
+function teardownPeer(){
+  clearAloneTimer();
+  try{ if(hostConn) hostConn.close(); }catch(e){}
+  try{ Object.values(conns).forEach(c=>c.close()); }catch(e){}
+  try{ if(peer) peer.destroy(); }catch(e){}
+  peer=null; hostConn=null; isHost=false; netMode='offline'; quickAutoJoin=false;
+  for(const k of Object.keys(conns)) delete conns[k];
+  for(const r of [...remotes]) removeRemote(r.id);
+  lobbyPlayers=[];
+}
+function cleanupNet(){
+  cancelQuickSearch();
+  teardownPeer();
+}
+
+/* ---- bot fallback: the ONLY time bots appear online ---- */
+function startBotGame(reason){
+  cleanupNet();
+  setNetStatus('🤖 Bots filled the arena — '+reason, 'bots');
+  mmStatus('🤖 '+reason);
+  startGame({mode:'bots', keepStatus:true});
+  toast('🤖 '+reason);
+}
+
+/* ---- PeerJS: host & join ---- */
+function startHost(code, opts){
+  opts = opts||{};
+  const autoStart = !!opts.autoStart, quickArena = !!opts.quickArena;
+  if(typeof Peer==='undefined'){ mmStatus('⚠️ Online library (PeerJS) failed to load — check internet and refresh.'); return; }
+  readName();
+  Net.roomCode = code || genCode();
+  isHost = true; netMode='online'; quickMatchHost = autoStart||quickArena;
+  arenaNo = opts.arena || 1;
+  peer = new Peer('nsr-'+Net.roomCode);
+  peer.on('open', id=>{
+    myId=id;
+    lobbyPlayers=[{id, name:myName, color:skinColor, host:true}];
+    if(quickArena){
+      // Arena host: drop straight into the LIVE arena — no waiting
+      // lobby. Anyone can late-join this arena at any moment.
+      qm.phase='hosting';
+      startGame({mode:'online', players:[{id, name:myName, color:skinColor}], arena:arenaNo});
+      setNetStatus('🌐 ONLINE · Arena '+arenaNo+' — waiting for real players… anyone can join anytime!', 'online');
+      startAloneTimer();
+      return;
+    }
+    showLobby();
+    $('lobbyStatus').textContent = autoStart ? '🎮 Real player found! They are connecting…' : 'Share the code — waiting for players…';
+  });
+  peer.on('connection', conn=>{
+    conns[conn.peer]=conn;
+    conn.on('open', ()=>{
+      // wait for their 'join' message with name/color
+    });
+    conn.on('data', m=>handleNet(m, conn.peer));
+    conn.on('close', ()=>{
+      delete conns[conn.peer];
+      lobbyPlayers=lobbyPlayers.filter(p=>p.id!==conn.peer);
+      renderLobby();
+      const rs=remotes.find(r=>r.id===conn.peer);
+      if(rs && state==='playing'){ toast('👋 '+rs.name+' left the match'); killSnake(rs,'left'); }
+      removeRemote(conn.peer);
+      netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
+      if(netMode==='online' && state==='playing')
+        setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+lobbyPlayers.length+'/'+ARENA_MAX+' players', 'online');
+    });
+  });
+  peer.on('error', err=>{
+    if(err && err.type==='unavailable-id'){ teardownPeer(); isHost=true; netMode='online'; startHost(Net.roomCode, opts); }
+    else mmStatus('⚠️ Connection error: '+(err&&err.type?err.type:'unknown')+'. Try again.');
+  });
+}
+function startJoin(code, opts){
+  opts = opts||{};
+  const auto = !!opts.auto, quick = !!opts.quick;
+  if(typeof Peer==='undefined'){ mmStatus('⚠️ Online library (PeerJS) failed to load — check internet and refresh.'); return; }
+  readName();
+  Net.roomCode=code; isHost=false; netMode='online'; quickAutoJoin=auto;
+  if(opts.arena) arenaNo=opts.arena;
+  if(quick){
+    // watchdog: connected but the host never started us (stale arena)
+    qmTimers.push(setTimeout(()=>{
+      if(qm.phase==='joining' && state!=='playing' && netMode==='online' && !isHost) onArenaJoinFailed(code);
+    }, 12000));
+  }
+  mmStatus('🔗 Connecting to '+(quick?('Arena '+arenaNo):('room '+code))+'…');
+  peer = new Peer();
+  peer.on('open', id=>{
+    myId=id;
+    hostConn = peer.connect('nsr-'+code, {reliable:true});
+    hostConn.on('open', ()=>{ hostConn.send({t:'join', name:myName, color:skinColor}); });
+    hostConn.on('data', m=>handleNet(m, null));
+    hostConn.on('close', ()=>{ if(netMode==='online') hostLeft(); });
+  });
+  peer.on('error', err=>{
+    if(err && err.type==='peer-unavailable'){
+      if(quickAutoJoin && quickJoinRetries<8){
+        quickJoinRetries++;
+        setTimeout(()=>{ if(quickAutoJoin) startJoin(code, {auto:true, quick:true, arena:arenaNo}); }, 1800);
+        return;
+      }
+      quickAutoJoin=false;
+      if(qm.phase==='joining'){ // arena host vanished mid-join -> next arena
+        onArenaJoinFailed(code);
+        return;
+      }
+      cleanupNet(); state='menu';
+      $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
+      mmStatus('⚠️ Room "'+code+'" not found. Check the code — or host your own room!');
+      return;
+    }
+    mmStatus('⚠️ Connection error: '+(err&&err.type?err.type:'unknown')+'. Try again.');
+  });
+}
+function showLobby(){
+  $('menu').classList.add('hidden');
+  $('lobbyCode').textContent=Net.roomCode;
+  $('startBtn').style.display = isHost ? '' : 'none';
+  $('lobby').classList.remove('hidden');
+  renderLobby();
+}
+function renderLobby(){
+  $('lobbyList').innerHTML = lobbyPlayers.map(p=>
+    `<li><span style="color:#${p.color.toString(16).padStart(6,'0')}">●</span> <b>${esc(p.name)}</b>${p.host?' <span class="host-tag">HOST</span>':''}${p.id===myId?' (YOU)':''}</li>`
+  ).join('') || '<li>Waiting…</li>';
+  if(isHost) $('lobbyStatus').textContent = lobbyPlayers.length>1 ? lobbyPlayers.length+' players in the room — press START!' : 'Share the code — waiting for players…';
+}
+function hostStartMatch(){
+  if(!isHost) return;
+  const players = lobbyPlayers.map(p=>({id:p.id, name:p.name, color:p.color}));
+  netSendAll({t:'start', players, arena:arenaNo});
+  startGame({mode:'online', players, arena:arenaNo});
+}
+function removeRemote(id){
+  const i=remotes.findIndex(r=>r.id===id);
+  if(i>=0){ const r=remotes[i]; try{ scene.remove(r.mesh); scene.remove(r.glow); scene.remove(r.shine); scene.remove(r.headGroup); }catch(e){} remotes.splice(i,1); }
+}
+function addRemote(id, name, color){
+  removeRemote(id);
+  const s=createSnake({name, color, id}, false);
+  s.remote=true; s.id=id;
+  const a=Math.random()*TAU;
+  resetSnakePos(s, Math.cos(a)*(ARENA_R-14), Math.sin(a)*(ARENA_R-14), a+Math.PI, 12);
+  s.netIn={a:s.angle, b:0, at:Date.now()};
+  remotes.push(s);
+  return s;
+}
+
+/* ---- arena host helpers: bot fill + swap-out ----
+   An online arena starts with REAL players only. If the host is
+   still alone after ~25s, bots fill the scene (and the game says
+   so). When a real player late-joins a bot-filled arena that is
+   at the 10-snake scene cap, one bot retires to make room. */
+let aloneTimer=null, botsInArena=false;
+function clearAloneTimer(){ if(aloneTimer){ clearTimeout(aloneTimer); aloneTimer=null; } }
+function startAloneTimer(){
+  clearAloneTimer();
+  aloneTimer=setTimeout(()=>{
+    aloneTimer=null;
+    if(netMode==='online' && isHost && state==='playing' && remotes.length===0 && !botsInArena){
+      fillArenaBots();
+      setNetStatus('🤖 No real players yet — bots filled Arena '+arenaNo+'. Real players can still join anytime!', 'bots');
+      toast('🤖 Bots filled Arena '+arenaNo+' — real players can join anytime!');
+    }
+  }, 25000);
+}
+function fillArenaBots(){
+  botsInArena=true;
+  for(const b of bots){
+    const a=Math.random()*TAU;
+    resetSnakePos(b, Math.cos(a)*(ARENA_R-14), Math.sin(a)*(ARENA_R-14), a+Math.PI, rand(14,26));
+    b.score=Math.floor(b.length*10);
+  }
+}
+function retireBotForRealPlayer(){
+  if(!botsInArena) return;
+  if(allSnakes().filter(s=>s.alive).length < ARENA_MAX) return;
+  const b=bots.find(x=>x.alive);
+  if(b){ b.alive=false; b.respawnIn=99999; b.mesh.visible=false; b.headGroup.visible=false; }
+}
+
+/* ---- network messages ---- */
+function netSendAll(msg){
+  for(const id of Object.keys(conns)){ try{ conns[id].send(msg); }catch(e){} }
+}
+function netSendTo(id, msg){ try{ conns[id] && conns[id].send(msg); }catch(e){} }
+function handleNet(m, fromPid){
+  if(!m || !m.t) return;
+  if(m.t==='join' && isHost){
+    // ARENA CAP: max 10 real players per arena/scene — a joiner who
+    // finds this arena full is told so and hops to the next arena.
+    if(lobbyPlayers.length >= ARENA_MAX){
+      netSendTo(fromPid, {t:'full', arena:arenaNo});
+      setTimeout(()=>{ try{ conns[fromPid] && conns[fromPid].close(); }catch(e){} }, 350);
+      return;
+    }
+    const p={id:fromPid, name:String(m.name||'Player').slice(0,14), color:(typeof m.color==='number'?m.color:0x00e5ff), host:false};
+    if(!lobbyPlayers.find(x=>x.id===fromPid)) lobbyPlayers.push(p);
+    renderLobby();
+    netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
+    if(state==='playing'){
+      // LATE JOIN, any time: add them straight into the live arena
+      clearAloneTimer();
+      retireBotForRealPlayer();
+      addRemote(fromPid, p.name, p.color);
+      netSendTo(fromPid, {t:'start', players:lobbyPlayers.map(x=>({id:x.id,name:x.name,color:x.color})), arena:arenaNo});
+      toast('🎮 '+p.name+' joined Arena '+arenaNo+'! ('+lobbyPlayers.length+'/'+ARENA_MAX+')');
+      if(!botsInArena) setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+lobbyPlayers.length+'/'+ARENA_MAX+' players', 'online');
+    } else if(quickMatchHost){
+      $('lobbyStatus').textContent='🎮 '+p.name+' joined! Starting…';
+      setTimeout(()=>{ if(isHost && state!=='playing') hostStartMatch(); }, 1200);
+    }
+  }
+  else if(m.t==='lobby' && !isHost){
+    lobbyPlayers=m.players||[];
+    if(m.arena) arenaNo=m.arena;
+    showLobby();
+    $('lobbyStatus').textContent='Connected! Waiting for the host to start…';
+    renderLobby();
+  }
+  else if(m.t==='start' && !isHost){
+    if(m.arena) arenaNo=m.arena;
+    arenaCountFromHost=(m.players||[]).length || arenaCountFromHost;
+    qmMarkJoined();
+    startGame({mode:'online', players:m.players||[], arena:arenaNo});
+  }
+  else if(m.t==='full'){
+    onArenaFull(m.arena);
+  }
+  else if(m.t==='in' && isHost){
+    const rs=remotes.find(r=>r.id===fromPid);
+    if(rs && rs.alive){ rs.netIn={a:m.a, b:m.b?1:0, at:Date.now()}; }
+  }
+  else if(m.t==='s' && !isHost){
+    applySnapshot(m);
+  }
+  else if(m.t==='kill' && !isHost){
+    if(m.killer===myId){ player.kills++; player.score+=25; toast('💥 +25  You killed '+m.victimName+'!'); }
+  }
+  else if(m.t==='end' && !isHost){
+    hostLeft();
+  }
+}
+function hostLeft(){
+  if(netMode!=='online') return;
+  // Host is gone: their snakes become bots and the game goes on locally.
+  for(const r of [...remotes]){
+    if(r.alive){ r.remote=false; r.bot=true; r.netIn=null; bots.push(r); }
+    else { try{ scene.remove(r.mesh); scene.remove(r.glow); scene.remove(r.shine); scene.remove(r.headGroup); }catch(e){} }
+  }
+  remotes.length=0;
+  botsInArena=true; arenaCountFromHost=0;
+  netMode='offline'; isHost=false; hostConn=null;
+  try{ if(peer) peer.destroy(); }catch(e){} peer=null;
+  setNetStatus('🤖 Host left — bots took over the arena.', 'bots');
+  toast('⚠️ Host left — bots took over!');
+  $('lobby').classList.add('hidden');
+  if(state!=='playing'){ state='menu'; $('menu').classList.remove('hidden'); }
+}
+
+/* ---- snapshots (host-authoritative) ---- */
+function buildSnapshot(){
+  return { t:'s', tick:++netTick,
+    an: arenaNo, ac: Math.max(1, lobbyPlayers.length),
+    orbs: orbs.map(o=>[+o.x.toFixed(1), +o.z.toFixed(1), o.value, o.color]),
+    sn: allSnakes().map(s=>[s.id, +s.x.toFixed(1), +s.z.toFixed(1), +s.angle.toFixed(2), +s.length.toFixed(1), s.score, s.alive?1:0, s.name, s.colorHex, s.bot?1:0]),
+    deaths: pendingDeaths.splice(0, pendingDeaths.length),
+  };
+}
+function applySnapshot(m){
+  lastSnapAt=Date.now();
+  if(m.an) arenaNo=m.an;
+  if(m.ac) arenaCountFromHost=m.ac;
+  // orbs: host is the source of truth
+  orbs.length=0;
+  for(const o of (m.orbs||[])){
+    orbs.push({x:o[0], z:o[1], value:o[2], color:o[3], phase:Math.random()*TAU, size:o[2]>=5?1.5:o[2]>=3?1.15:0.85});
+  }
+  for(const d of (m.deaths||[])){
+    if(d.id===myId && player.alive){
+      killSnake(player, d.cause||'snake');
+    } else {
+      const rs=remotes.find(r=>r.id===d.id);
+      if(rs && rs.alive){ rs.alive=false; rs.mesh.visible=false; rs.headGroup.visible=false; toast('💥 '+rs.name+' crashed!'); }
+    }
+  }
+  for(const e of (m.sn||[])){
+    const [id,x,z,a,len,sc,al,name,col]=e;
+    if(id===myId){
+      player.score=sc;
+      if(player.alive && al===0){ /* death handled via deaths[] above */ }
+      if(player.alive){
+        player.length=len;
+        const drift=Math.hypot(x-player.x, z-player.z);
+        if(drift>3){ // host correction: snap + rebuild trail
+          player.x=x; player.z=z; player.angle=a; player.targetAngle=a;
+          player.history=[];
+          for(let i=0;i<400;i++) player.history.push({x:x-Math.cos(a)*i*0.35, z:z-Math.sin(a)*i*0.35});
+        }
+      }
+      continue;
+    }
+    let rs=remotes.find(r=>r.id===id);
+    const isNew=!rs;
+    if(!rs){ rs=addRemote(id, name, col); }
+    rs.name=name; rs.colorHex=col;
+    if(e[9]!==undefined) rs.bot=!!e[9];   // host's filler bots stay labelled 🤖
+    rs.score=sc; rs.length=len;
+    rs.snapX=x; rs.snapZ=z; rs.snapA=a;
+    if(isNew){ // first sighting: place exactly, no glide from a random spawn
+      rs.x=x; rs.z=z; rs.angle=a; rs.targetAngle=a;
+      rs.history=[];
+      for(let i=0;i<400;i++) rs.history.push({x:x-Math.cos(a)*i*0.35, z:z-Math.sin(a)*i*0.35});
+    }
+    if(al===0){ if(rs.alive){ rs.alive=false; rs.mesh.visible=false; rs.headGroup.visible=false; } }
+    else { rs.alive=true; rs.mesh.visible=true; rs.headGroup.visible=true; }
+  }
+}
+
+/* ---- Quick Match ARENAS: join anytime, max 10 per arena ----
+   The SAME snake_queue table doubles as the arena directory:
+   - host row:   status 'open',    room_code = arena code, map = 'arena-N'
+   - member row: status 'matched', room_code = arena code, map = 'arena-N'
+   Everyone heartbeats their row (created_at = now) so rows from
+   closed tabs age out of the freshness window. A searcher joins
+   the lowest-numbered arena that still has space; if every arena
+   is full (or none exists) they open the NEXT arena themselves
+   and play in it live — late joiners drop in at any moment. */
+const ARENA_FRESH_MS = 45000;
+function myRowUpdate(fields){
+  if(!sb || !qm.rowId) return;
+  try{ sb.from('snake_queue').update(fields).eq('id', qm.rowId).then(()=>{}); }catch(e){}
+}
+function startHeartbeat(){
+  qmTimers.push(setInterval(()=>myRowUpdate({created_at:new Date().toISOString()}), 12000));
+}
+async function fetchLiveRows(){
+  const since=new Date(Date.now()-ARENA_FRESH_MS).toISOString();
+  const res=await sb.from('snake_queue').select('*').gt('created_at', since).order('created_at',{ascending:true}).limit(80);
+  if(res.error) throw res.error;
+  return res.data||[];
+}
+function arenaDirectory(rows){
+  const out=[];
+  for(const r of rows){
+    if(r.status==='open' && r.room_code){
+      const n=parseInt(String(r.map||'').replace('arena-',''),10) || (out.length+1);
+      const count=rows.filter(x=>x.room_code===r.room_code && (x.status==='open'||x.status==='matched')).length;
+      out.push({code:r.room_code, n, count});
+    }
+  }
+  out.sort((a,b)=>a.n-b.n);
+  return out;
+}
+async function qmArenaStep(){
+  if(!qm.searching || !sb) return;
+  let rows;
+  try{ rows=await fetchLiveRows(); }catch(e){ return; }   // transient — next poll retries
+  if(!qm.searching || qm.phase!=='searching') return;
+  const arenas=arenaDirectory(rows).filter(a=>!(a.code in arenaFullCodes));
+  const open=arenas.find(a=>a.count<ARENA_MAX);
+  if(open){
+    qm.searching=false; qm.phase='joining'; quickAutoJoin=true; quickJoinRetries=0;
+    arenaNo=open.n;
+    mmStatus('🎮 Joining <b>Arena '+open.n+'</b> ('+open.count+'/'+ARENA_MAX+' players)…');
+    startJoin(open.code, {auto:true, quick:true, arena:open.n});
+    return;
+  }
+  const nextN = arenas.length ? Math.max.apply(null, arenas.map(a=>a.n))+1 : 1;
+  becomeArenaHost(nextN);
+}
+function becomeArenaHost(n){
+  qm.searching=false; qm.phase='hosting'; qm.claimed=true; quickMatchHost=true;
+  arenaNo=n;
+  const code=genCode();
+  myRowUpdate({status:'open', room_code:code, host_id:netPlayerId(), map:'arena-'+n});
+  mmStatus('🏟 Opening <b>Arena '+n+'</b> — jumping in now, others can join anytime!');
+  startHost(code, {quickArena:true, arena:n});
+}
+function qmMarkJoined(){
+  if(qm.phase==='joining' || qm.phase==='searching'){
+    qm.phase='joined'; qm.searching=false;
+    myRowUpdate({status:'matched', room_code:Net.roomCode, map:'arena-'+arenaNo});
+  }
+}
+function onArenaFull(n){
+  if(Net.roomCode) arenaFullCodes[Net.roomCode]=1;
+  teardownPeer();
+  if(qm.phase==='joining' || qm.phase==='joined' || qm.phase==='searching'){
+    qm.phase='searching'; qm.searching=true; quickAutoJoin=false;
+    mmStatus('🏟 Arena '+(n||arenaNo)+' is full ('+ARENA_MAX+'/'+ARENA_MAX+') — finding the next arena…');
+    qmArenaStep();
+  } else {
+    state='menu';
+    $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
+    mmStatus('🏟 That arena is full — max '+ARENA_MAX+' players per arena. Try QUICK MATCH to land in the next arena!');
+  }
+}
+function onArenaJoinFailed(code){
+  arenaFullCodes[code]=1;   // unreachable this session — skip it
+  teardownPeer();
+  quickAutoJoin=false;
+  if(quickJoinRetries>3){ startBotGame('The arena host could not be reached — bots filled the arena.'); return; }
+  qm.phase='searching'; qm.searching=true;
+  mmStatus('🔍 That arena went quiet — looking for another arena…');
+  qmArenaStep();
+}
+function startQuickMatch(){
+  readName(); ac();
+  cancelQuickSearch();
+  for(const k of Object.keys(arenaFullCodes)) delete arenaFullCodes[k];
+  mmStatus('🔍 Finding an arena with space…');
+  if(!sb){
+    mmStatus('☁️ Cloud unreachable — starting a bot match…');
+    qmTimers.push(setTimeout(()=>{ if(state==='menu') startBotGame('Cloud unreachable right now, so no real players could be found.'); }, 1200));
+    return;
+  }
+  qm.searching=true; qm.phase='searching'; qm.startedAt=Date.now(); qm.claimed=false; qm.rowId=qmRowId();
+  sb.from('snake_queue').insert({id:qm.rowId, player_id:netPlayerId(), player_name:myName, mode:'quick', map:'arena', status:'waiting', room_code:null, host_id:null}).then(res=>{
+    if(res.error){
+      qm.searching=false; qm.phase='';
+      mmStatus('⚠️ Matchmaking is not set up yet — starting a bot match…');
+      qmTimers.push(setTimeout(()=>{ if(state==='menu') startBotGame('Matchmaking table is not set up yet (run snake_queue.sql in Supabase) — bots filled the arena.'); }, 1500));
+      return;
+    }
+    startHeartbeat();
+    qmArenaStep();
+    qm.poll=setInterval(()=>{ if(qm.phase==='searching') qmArenaStep(); }, 3000);
+  });
+}
+const Net = {
+  get mode(){ return netMode; }, get isHost(){ return isHost; },
+  get remotes(){ return remotes; }, get myId(){ return myId; },
+  roomCode:null, qm,
+  startQuick: startQuickMatch, startBots: (r)=>startBotGame(r||'Bot arena.'),
+  host: (c)=>startHost(c||genCode(), {}),
+  join: (c)=>startJoin(c, {}),
+  buildSnapshot, applySnapshot, cleanup: cleanupNet,
+};
+window.addEventListener('beforeunload', ()=>{ try{ qmDeleteRow(); }catch(e){} });
+
+
+
+/* ---------------- movement & collisions ---------------- */
+function snakeSpeed(s){
+  const base = 11.5 - Math.min(2.2, s.length*0.012);
+  return s.boost ? base*1.75 : base;
+}
+function moveSnake(s, dt){
+  const turnRate = s.boost ? 6.2 : 5.0;
+  const d = angDiff(s.angle, s.targetAngle);
+  s.angle += clamp(d, -turnRate*dt, turnRate*dt);
+  const sp = snakeSpeed(s);
+  s.x += Math.cos(s.angle)*sp*dt;
+  s.z += Math.sin(s.angle)*sp*dt;
+  s.history.unshift({x:s.x, z:s.z});
+  const maxHist = Math.ceil((MAX_SEG*SPACING+12)/0.2);
+  if(s.history.length>maxHist) s.history.length=maxHist;
+  // boost burns length: drop a small orb behind every 0.45s
+  // (not on an online client: the host owns length, snapshots correct it)
+  if(s.boost && s.length>10 && !(netMode==='online' && !isHost && s.isPlayer)){
+    s.boostTimer+=dt;
+    if(s.boostTimer>0.45){
+      s.boostTimer=0; s.length=Math.max(8, s.length-1);
+      const tail=s.segPos[s.segPos.length-1]||{x:s.x,z:s.z};
+      spawnOrb(tail.x, tail.z, 1);
+    }
+  }
+}
+function headHits(s){
+  if(Math.hypot(s.x,s.z) > ARENA_R-1.2) return 'wall';
+  // snake.io rules: your OWN tail is SAFE — you can slither straight
+  // through it and never die. Only walls and OTHER snakes' bodies kill.
+  for(const o of allSnakes()){
+    if(o===s || !o.alive) continue;
+    for(let i=0;i<o.segPos.length;i+=2){
+      const p=o.segPos[i];
+      if(Math.hypot(p.x-s.x,p.z-s.z)<0.95) return o.isPlayer?'YOU':o.name;
+    }
+  }
+  return null;
+}
+function eatCheck(s){
+  for(let i=orbs.length-1;i>=0;i--){
+    const o=orbs[i], dx=o.x-s.x, dz=o.z-s.z;
+    if(dx*dx+dz*dz < 1.45){
+      orbs.splice(i,1);
+      s.length=Math.min(MAX_SEG, s.length + o.value*0.75);   // growth you can SEE
+      s.score += o.value*10; s.orbsEaten++; s.combo++;
+      s.headPulse = 1;                                       // satisfying gulp
+      if(s.isPlayer){
+        if(o.value>=5){ sfx.big(); burst(o.x,o.z,0xffd23d,1.3); }
+        else { sfx.eat(s.combo); burst(o.x,o.z,o.color,0.8); }
+        emitPart(o.x, 0.7, o.z, o.color);
+        spawnScorePop('+'+(o.value*10));
+      }
+      if(!o.food) spawnOrb();   // normal orbs are replaced at once — arena never runs dry; a dead snake's remains are a finite feast
+    }
+  }
+  if(s.combo>0 && Math.random()<0.02) s.combo=0;
+}
+
+/* ---------------- bot AI ---------------- */
+function botThink(b, dt){
+  b.aiTimer-=dt;
+  if(b.aiTimer<=0){
+    b.aiTimer=rand(0.25,0.5);
+    let best=null, bd=1e9;
+    for(const o of orbs){
+      const d=(o.x-b.x)*(o.x-b.x)+(o.z-b.z)*(o.z-b.z);
+      if(d<bd){ bd=d; best=o; }
+    }
+    if(best) b.aiTarget={x:best.x, z:best.z};
+    else b.aiTarget=null;
+    if(Math.random()<0.15) b.wander += rand(-1.2,1.2);
+  }
+  let ta = b.angle + Math.sin(b.wander)*0.4;
+  if(b.aiTarget) ta = Math.atan2(b.aiTarget.z-b.z, b.aiTarget.x-b.x);
+  const dc=Math.hypot(b.x,b.z);
+  if(dc > ARENA_R-9){
+    const toC=Math.atan2(-b.z,-b.x), w=(dc-(ARENA_R-9))/9;
+    ta = ta*(1-w) + toC*w;
+  }
+  const ax=b.x+Math.cos(b.angle)*7, az=b.z+Math.sin(b.angle)*7;
+  for(const o of allSnakes()){
+    if(o===b || !o.alive) continue;
+    for(let i=0;i<o.segPos.length;i+=3){
+      const p=o.segPos[i];
+      if(Math.hypot(p.x-ax,p.z-az)<3.2){ ta = b.angle + (Math.random()<0.5?1.4:-1.4); break; }
+    }
+  }
+  b.targetAngle=ta;
+  b.boost = b.length>26 && Math.random()<0.25 && b.aiTarget && Math.hypot(b.aiTarget.x-b.x,b.aiTarget.z-b.z)<26;
+}
+
+/* ---------------- player input ---------------- */
+function steerFromScreen(cx, cy){
+  const dx = cx - window.innerWidth/2, dy = cy - window.innerHeight/2;
+  if(Math.hypot(dx,dy)<8) return;
+  player.targetAngle = Math.atan2(dy, dx);
+}
+window.addEventListener('mousemove', e=>{ if(state==='playing') steerFromScreen(e.clientX, e.clientY); });
+window.addEventListener('mousedown', e=>{ if(state==='playing' && e.target===renderer.domElement) mouseDown=true; });
+window.addEventListener('mouseup', ()=>{ mouseDown=false; });
+window.addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if(e.code==='KeyP' || e.code==='Escape') togglePause();
+  if(e.code==='KeyM') toggleMute();
+  if(e.code==='Enter' && (state==='menu'||state==='over')) startGame();
+});
+window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+function keySteer(){
+  let dx=0, dz=0;
+  if(keys['KeyW']||keys['ArrowUp']) dz-=1;
+  if(keys['KeyS']||keys['ArrowDown']) dz+=1;
+  if(keys['KeyA']||keys['ArrowLeft']) dx-=1;
+  if(keys['KeyD']||keys['ArrowRight']) dx+=1;
+  if(dx||dz) player.targetAngle=Math.atan2(dz,dx);
+}
+/* FLOATING ANYWHERE-JOYSTICK (mobile): touch ANYWHERE on the screen
+   and a joystick appears right under your thumb; drag it to steer,
+   lift your finger and it vanishes. No fixed joystick position.
+   The BOOST button stays as its own on-screen button. */
+const joyEl=$('joy'), joyKnob=$('joyKnob');
+const JOY_R=46;                       // knob travel radius (px)
+let joyId=null, joyCX=0, joyCY=0;
+function joyShow(x, y){
+  joyCX=x; joyCY=y;
+  joyEl.style.left=x+'px'; joyEl.style.top=y+'px';
+  joyKnob.style.left='50%'; joyKnob.style.top='50%';
+  joyEl.classList.remove('hidden');
+}
+function joyMove(x, y){
+  if(!player) return;
+  const dx=x-joyCX, dy=y-joyCY, dist=Math.hypot(dx,dy);
+  if(dist>9) player.targetAngle=Math.atan2(dy, dx);          // dead-zone 9px
+  const cl=Math.min(dist, JOY_R), a=dist>0?Math.atan2(dy,dx):0;
+  joyKnob.style.left=(50 + Math.cos(a)*cl/124*100)+'%';
+  joyKnob.style.top =(50 + Math.sin(a)*cl/124*100)+'%';
+}
+function joyHide(){
+  joyId=null;
+  joyEl.classList.add('hidden');
+}
+renderer.domElement.addEventListener('touchstart', e=>{
+  if(state!=='playing' || joyId!==null) return;
+  const t=e.changedTouches[0];
+  joyId=t.identifier;
+  joyShow(t.clientX, t.clientY);
+  joyMove(t.clientX, t.clientY);
+}, {passive:true});
+renderer.domElement.addEventListener('touchmove', e=>{
+  if(joyId===null) return;
+  for(let i=0;i<e.changedTouches.length;i++){
+    const t=e.changedTouches[i];
+    if(t.identifier===joyId) joyMove(t.clientX, t.clientY);
+  }
+}, {passive:true});
+function joyEnd(e){
+  for(let i=0;i<e.changedTouches.length;i++){
+    if(e.changedTouches[i].identifier===joyId) joyHide();
+  }
+}
+renderer.domElement.addEventListener('touchend', joyEnd);
+renderer.domElement.addEventListener('touchcancel', joyEnd);
+const boostBtn=$('boostBtn');
+const boostOn=e=>{ e.preventDefault(); player.boost=true; };
+const boostOff=e=>{ e.preventDefault(); player.boost=false; };
+boostBtn.addEventListener('touchstart', boostOn, {passive:false});
+boostBtn.addEventListener('touchend', boostOff); boostBtn.addEventListener('touchcancel', boostOff);
+boostBtn.addEventListener('mousedown', boostOn); boostBtn.addEventListener('mouseup', boostOff);
+if('ontouchstart' in window || navigator.maxTouchPoints>0) document.body.classList.add('touch');
+
+/* ---------------- HUD / leaderboard / minimap ---------------- */
+const mm=$('minimap').getContext('2d');
+/* 🏟 Arena badge: which arena/scene am I in, and how full is it? */
+function updateArenaBadge(){
+  const el=$('arenaBadge');
+  if(!el) return;
+  if(state!=='playing' && state!=='paused'){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  let txt;
+  if(netMode==='online'){
+    const c = isHost ? Math.max(1, lobbyPlayers.length)
+                     : (arenaCountFromHost || (1+remotes.length));
+    txt = '🏟 ARENA '+arenaNo+' · '+c+'/'+ARENA_MAX+' PLAYERS';
+  } else {
+    const c = allSnakes().filter(s=>s.alive).length;
+    txt = '🏟 ARENA '+arenaNo+' · '+c+'/'+ARENA_MAX+' SNAKES · 🤖 BOTS';
+  }
+  if(el.textContent!==txt) el.textContent=txt;
+}
+function updateHUD(){
+  $('hudScore').textContent=player.score;
+  $('hudOrbs').textContent=player.orbsEaten;
+  $('hudKills').textContent=player.kills;
+  $('hudLen').textContent=Math.floor(player.length);
+  $('hudBest').textContent=Math.max(bestLen, Math.floor(player.length));
+  $('hudTime').textContent=fmtTime(elapsed);
+  const rows=allSnakes().filter(s=>s.alive)
+    .sort((a,b)=>b.length-a.length).slice(0,8)
+    .map((s,i)=>`<li class="${s.isPlayer?'me':''}"><span><span class="rank">${i+1}.</span> ${s.isPlayer?'👑 ':''}${esc(s.name)}${s.bot?' 🤖':''}</span><span>${Math.floor(s.length)}</span></li>`)
+    .join('');
+  $('boardList').innerHTML=rows;
+  const W=130, sc=W/(ARENA_R*2+8);
+  mm.clearRect(0,0,W,W);
+  mm.fillStyle='rgba(10,16,40,0.9)'; mm.beginPath(); mm.arc(W/2,W/2,ARENA_R*sc,0,TAU); mm.fill();
+  mm.strokeStyle='rgba(0,229,255,0.6)'; mm.stroke();
+  for(let i=0;i<orbs.length;i+=3){ const o=orbs[i];
+    mm.fillStyle='#'+o.color.toString(16).padStart(6,'0');
+    mm.fillRect(W/2+o.x*sc-1, W/2+o.z*sc-1, 2, 2);
+  }
+  for(const s of allSnakes()){
+    if(!s.alive) continue;
+    mm.fillStyle='#'+s.colorHex.toString(16).padStart(6,'0');
+    for(let i=0;i<s.segPos.length;i+=4){ const p=s.segPos[i];
+      mm.fillRect(W/2+p.x*sc-1.5, W/2+p.z*sc-1.5, 3, 3);
+    }
+    if(s.isPlayer){ mm.strokeStyle='#fff'; mm.beginPath(); mm.arc(W/2+s.x*sc, W/2+s.z*sc, 5, 0, TAU); mm.stroke(); }
+  }
+  updateArenaBadge();
+}
+let hudTimer=0;
+
+/* ---------------- main loop ---------------- */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(), 0.05);
+  const t=clock.elapsedTime;
+  wallRing.rotation.z += dt*0.15;
+  wallRing2.rotation.z -= dt*0.1;
+  wallCyl.material.opacity = 0.10 + 0.05*Math.sin(t*2);
+  refreshOrbs(t);
+  /* keep the arena stocked at the balanced orb level (host/offline
+     simulate orbs; online clients receive them in snapshots) */
+  if((netMode!=='online' || isHost) && orbs.length<ORB_TARGET){
+    spawnOrb(); if(orbs.length<ORB_TARGET-12) spawnOrb();
+  }
+  updateParts(dt);
+  if(player && player.skinDef && (player.skinDef.pattern==='rainbow' || player.skinDef.pattern==='flame')){
+    rainbowTimer+=dt;
+    const step = player.skinDef.pattern==='flame' ? 0.09 : 0.07;
+    if(rainbowTimer>step){ rainbowTimer=0; rainbowOff=(rainbowOff+0.025)%1; flameShift=(flameShift+1)%8; paintSnake(player); }
+  }
+  for(const b of bursts){ if(b.life>0){ b.life-=dt*1.8; b.mesh.scale.addScalar(dt*14); b.mesh.material.opacity=Math.max(0,b.life*0.8); if(b.life<=0) b.mesh.visible=false; } }
+  if(state==='playing' && player){
+    elapsed+=dt;
+    keySteer();
+    player.boost = player.boost || mouseDown || keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
+    if(player.boost && Math.random()<dt*2) sfx.boost();
+    if(netMode==='online' && !isHost){
+      // ---- CLIENT: predict my own movement; the host decides everything else
+      inputTimer+=dt;
+      if(inputTimer>0.066 && hostConn){
+        inputTimer=0;
+        try{ hostConn.send({t:'in', a:+player.targetAngle.toFixed(3), b:player.boost?1:0}); }catch(e){}
+      }
+      moveSnake(player, dt);
+      updateSnakeMesh(player, t);
+      for(const r of remotes){
+        if(!r.alive) continue;
+        // glide toward the host's latest snapshot position
+        const k=Math.min(1, dt*10);
+        r.x+=(r.snapX-r.x)*k; r.z+=(r.snapZ-r.z)*k;
+        r.angle+=angDiff(r.angle, r.snapA)*k;
+        r.history.unshift({x:r.x, z:r.z});
+        const maxHist=Math.ceil((MAX_SEG*SPACING+12)/0.2);
+        if(r.history.length>maxHist) r.history.length=maxHist;
+        updateSnakeMesh(r, t);
+      }
+    } else {
+      // ---- OFFLINE or HOST: full authoritative simulation
+      moveSnake(player, dt);
+      updateSnakeMesh(player, t);
+      eatCheck(player);
+      const hit= headHits(player);
+      if(hit) killSnake(player, hit);
+      for(const b of bots){
+        if(!b.alive){ b.respawnIn-=dt; if(b.respawnIn<=0) respawnBot(b); continue; }
+        botThink(b, dt);
+        moveSnake(b, dt);
+        updateSnakeMesh(b, t);
+        eatCheck(b);
+        const bh=headHits(b);
+        if(bh) killSnake(b, bh==='wall'?'wall':(bh==='YOU'?'YOU':'bot'));
+      }
+      if(netMode==='online' && isHost){
+        for(const r of remotes){
+          if(!r.alive) continue;
+          if(r.netIn){ r.targetAngle=r.netIn.a; r.boost=!!r.netIn.b; }
+          moveSnake(r, dt);
+          updateSnakeMesh(r, t);
+          eatCheck(r);
+          const rh=headHits(r);
+          if(rh) killSnake(r, rh==='wall'?'wall':(rh==='YOU'?'YOU':rh));
+        }
+        snapTimer+=dt;
+        if(snapTimer>=0.1){ snapTimer=0; netSendAll(buildSnapshot()); }
+      }
+    }
+    if(player.boost && player.alive){ emitPart(player.x, 0.6, player.z, player.colorHex); emitPart(player.x, 0.6, player.z, 0xffffff); }
+    for(const b of bots) if(b.alive && b.boost) emitPart(b.x, 0.6, b.z, b.colorHex);
+    const camH = 24 + Math.min(10, player.length*0.07), camD = 13 + Math.min(5, player.length*0.035);
+    camera.position.x += (player.x-camera.position.x)*Math.min(1,dt*4);
+    camera.position.y += (camH-camera.position.y)*Math.min(1,dt*4);
+    camera.position.z += ((player.z+camD)-camera.position.z)*Math.min(1,dt*4);
+    camera.lookAt(player.x, 0, player.z - 3);
+    const targetFov = player.boost ? 64 : 58;
+    if(Math.abs(camera.fov-targetFov)>0.05){ camera.fov += (targetFov-camera.fov)*Math.min(1,dt*5); camera.updateProjectionMatrix(); }
+    headLight.position.set(player.x, 3, player.z);
+    hudTimer+=dt; if(hudTimer>0.12){ hudTimer=0; updateHUD(); }
+  } else if(state==='menu' && player){
+    const a=t*0.12;
+    camera.position.set(Math.cos(a)*34, 26, Math.sin(a)*34);
+    camera.lookAt(0,0,0);
+    for(const b of bots){
+      if(b.alive){ botThink(b,dt); moveSnake(b,dt); updateSnakeMesh(b,t); eatCheck(b); const bh=headHits(b); if(bh) killSnake(b,'bot'); }
+      else { b.respawnIn-=dt; if(b.respawnIn<=0) respawnBot(b); }
+    }
+    updateSnakeMesh(player, t);
+  }
+  for(const s of allSnakes()){
+    if(s.glow) s.glow.visible = s.alive;
+    if(s.shine) s.shine.visible = s.alive;
+    if(s.headPulse) s.headPulse=Math.max(0, s.headPulse - dt*4);
+  }
+  renderer.render(scene, camera);
+}
+
+/* ---------------- flow: menu / start / pause / over ---------------- */
+function startGame(opts){
+  opts=opts||{};
+  const mode=opts.mode||'bots';
+  ac(); sfx.start();
+  if(!player) initSnakes();
+  readName();
+  player.name=myName; player.colorHex=skinColor; player.skinDef=skinDef; player.id=myId;
+  if(opts.role) isHost = opts.role==='host';
+  resetSnakePos(player, 0, 18, -Math.PI/2, 12);
+  netMode = mode==='online' ? 'online' : 'offline';
+  arenaNo = (mode==='online' && opts.arena) ? opts.arena : 1;
+  arenaCountFromHost = 0;
+  for(const r of [...remotes]) removeRemote(r.id);
+  lobbyPlayers=[];
+  if(mode==='online'){
+    // real players first — bots stay OFF in an online arena unless
+    // the host is left alone and the bot-fill timer brings them in
+    botsInArena=false;
+    for(const b of bots){ b.alive=false; b.respawnIn=99999; b.mesh.visible=false; b.headGroup.visible=false; }
+    const list=opts.players||[];
+    for(const p of list){
+      if(p.id===myId) continue;
+      addRemote(p.id, p.name, p.color);
+    }
+    orbs.length=0; for(let i=0;i<ORB_TARGET;i++) spawnOrb();
+    setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+(remotes.length+1)+'/'+ARENA_MAX+' players', 'online');
+    toast('🌐 ONLINE! '+remotes.length+' real rival'+(remotes.length===1?'':'s')+' in the arena!');
+  } else {
+    for(const b of bots){ const a=Math.random()*TAU; resetSnakePos(b, Math.cos(a)*(ARENA_R-14), Math.sin(a)*(ARENA_R-14), a+Math.PI, rand(14,26)); b.score=Math.floor(b.length*10); }
+    orbs.length=0; for(let i=0;i<ORB_TARGET;i++) spawnOrb();
+    if(!opts.keepStatus) setNetStatus('🤖 Bots — offline arena', 'bots');
+    toast('🐍 GO! Eat the glowing orbs!');
+  }
+  elapsed=0; pendingDeaths=[]; snapTimer=0; inputTimer=0;
+  state='playing';
+  mmStatus('');
+  $('menu').classList.add('hidden'); $('lobby').classList.add('hidden');
+  $('gameover').classList.add('hidden'); $('paused').classList.add('hidden');
+  $('hud').classList.remove('hidden'); $('board').classList.remove('hidden');
+  camera.position.set(player.x, 26, player.z+14);
+  updateHUD();
+}
+function togglePause(){
+  if(state==='playing'){ state='paused'; $('paused').classList.remove('hidden'); }
+  else if(state==='paused'){ state='playing'; $('paused').classList.add('hidden'); }
+}
+function toggleMute(){
+  muted=!muted; store.set('neonSnakeRushMuted',muted);
+  $('muteBtn').textContent = muted?'🔇':'🔊';
+}
+$('quickBtn').addEventListener('click', ()=>{ sfx.click(); startQuickMatch(); });
+$('botsBtn').addEventListener('click', ()=>{ sfx.click(); cleanupNet(); readName(); startGame({mode:'bots'}); });
+$('hostBtn').addEventListener('click', ()=>{ sfx.click(); startHost(); });
+$('joinBtn').addEventListener('click', ()=>{
+  sfx.click();
+  const code=($('roomCodeInput').value||'').trim().toUpperCase();
+  if(code.length!==4){ mmStatus('⚠️ Enter the 4-letter room code first.'); return; }
+  startJoin(code, {});
+});
+$('startBtn').addEventListener('click', ()=>{ sfx.click(); hostStartMatch(); });
+$('cancelLobbyBtn').addEventListener('click', ()=>{
+  sfx.click(); cleanupNet(); state='menu';
+  $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
+  mmStatus('');
+});
+$('againBtn').addEventListener('click', ()=>{
+  sfx.click();
+  if(netMode==='online' && isHost) netSendAll({t:'end'}); // let clients fall back to bots
+  cleanupNet();
+  startGame({mode:'bots'});
+});
+$('menuBtn').addEventListener('click', ()=>{
+  sfx.click(); cleanupNet(); state='menu';
+  $('gameover').classList.add('hidden'); $('menu').classList.remove('hidden');
+  $('hud').classList.add('hidden'); $('board').classList.add('hidden'); $('arenaBadge').classList.add('hidden');
+  setNetStatus(null); initSnakes(); // restore the menu-background bots
+});
+$('resumeBtn').addEventListener('click', ()=>{ sfx.click(); togglePause(); });
+$('pauseBtn').addEventListener('click', ()=>{ sfx.click(); togglePause(); });
+$('muteBtn').addEventListener('click', toggleMute);
+if(muted) $('muteBtn').textContent='🔇';
+/* skin picker is rendered by its own small script before this one
+   (so the swatches always appear); it calls this hook on a pick */
+window.NSR_setSkin = function(def){
+  if(typeof def==='number'){ skinDef={name:'Custom', colors:[def], pattern:'solid'}; }
+  else if(def && def.colors){ skinDef=def; }
+  else return;
+  skinColor=skinDef.colors[0];
+  if(player){ player.colorHex=skinColor; player.skinDef=skinDef; paintSnake(player); }
+};
+$('menuBest').textContent=bestLen;
+$('menuBestScore').textContent=bestScore;
+window.addEventListener('resize', ()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ---------------- boot ---------------- */
+initSnakes();
+animate();
+
+/* debug / test handle (harmless in production) */
+window.NEON_SNAKE = {
+  get state(){ return state; },
+  get player(){ return player; },
+  get bots(){ return bots; },
+  get orbs(){ return orbs; },
+  get remotes(){ return remotes; },
+  get netMode(){ return netMode; },
+  get arenaNo(){ return arenaNo; },
+  get arenaMax(){ return ARENA_MAX; },
+  get myId(){ return myId; },
+  Net,
+  start: startGame,
+  startQuick: startQuickMatch,
+  startBots: (r)=>startBotGame(r||'Bot arena.'),
+  setTarget(a){ player.targetAngle=a; },
+  teleport(x,z){ player.x=x; player.z=z; player.history.unshift({x,z}); },
+  placeOrbAtHead(v){ spawnOrb(player.x+0.5, player.z, v||1); },
+  kill: ()=>killSnake(player,'wall'),
+};
+</script>
+</body>
+</html>
