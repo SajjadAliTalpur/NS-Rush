@@ -11,7 +11,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rubik:wght@400;600;800&display=swap" rel="stylesheet">
 <script src="assets/three.min.js"></script>
-<script src="assets/peerjs.min.js"></script>
 <script src="assets/supabase.min.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -271,7 +270,8 @@
     stays behind as food chunks along your full length and whoever
     eats them grows, trap rivals, climb the leaderboard)
    MULTIPLAYER: real players first via Supabase queue
-   (`snake_queue` — see snake_queue.sql) + PeerJS rooms,
+   (`snake_queue` — see snake_queue.sql) + Supabase Realtime
+   broadcast channels,
    host-authoritative snapshots. Bots ONLY fill in when no real
    player is found within ~25s, or the cloud is unreachable —
    and the game always says so plainly.
@@ -299,7 +299,7 @@ const BOT_DEFS = [
   {name:'Cobra', color:0x7CFC00},
 ];
 const $ = id => document.getElementById(id);
-/* Player names come from other people (PeerJS / queue rows) — always
+/* Player names come from other people (Realtime / queue rows) — always
    escape them before they touch innerHTML. */
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
@@ -897,7 +897,8 @@ function spawnScorePop(txt){
    - Supabase project "WeekendTrend" (gnzhaebfqhlfenrwhjjg) queue table
      `snake_queue` for matchmaking (see snake_queue.sql — run it once in
      the Supabase SQL editor; same columns/RLS as cube_strike_queue).
-   - PeerJS rooms (free PeerJS cloud broker, no server) for gameplay.
+   - Supabase Realtime broadcast channels (arena-<CODE>) for gameplay
+     sync — same project as the queue, no extra server.
    - Host-authoritative: the host simulates every snake + orbs and
      broadcasts snapshots 10x/sec; clients send steering input and
      predict only their own snake locally, host corrects them.
@@ -918,8 +919,8 @@ const arenaFullCodes = {};      // room codes known full/unreachable this sessio
 let myName = 'Player';
 let myId = 'me';
 const remotes = [];             // real-player snakes (not bots, not AI)
-let peer = null, hostConn = null;
-const conns = {};               // host: peerId -> DataConnection
+let rtChannel = null, rtChannelName = null, rtReady = false;
+const remoteLastSeen = {};      // host: playerId -> last join/'in' time (ghost pruning)
 let lobbyPlayers = [];          // [{id,name,color,host}]
 let netTick = 0, snapTimer = 0, inputTimer = 0, lastSnapAt = 0;
 let pendingDeaths = [];         // host: [{id, cause}] since last snapshot
@@ -971,21 +972,19 @@ function cancelQuickSearch(){
   clearAloneTimer();
   qmDeleteRow(); qmClearTimers();
 }
-/* close peer connections only — the queue row & search state survive
-   (used when hopping from a full/dead arena to the next one) */
-function teardownPeer(){
+/* leave the Realtime channel only — the queue row & search state
+   survive (used when hopping from a full/dead arena to the next one) */
+function teardownChannel(){
   clearAloneTimer();
-  try{ if(hostConn) hostConn.close(); }catch(e){}
-  try{ Object.values(conns).forEach(c=>c.close()); }catch(e){}
-  try{ if(peer) peer.destroy(); }catch(e){}
-  peer=null; hostConn=null; isHost=false; netMode='offline'; quickAutoJoin=false;
-  for(const k of Object.keys(conns)) delete conns[k];
+  leaveChannel(true);
+  isHost=false; netMode='offline'; quickAutoJoin=false;
+  for(const k of Object.keys(remoteLastSeen)) delete remoteLastSeen[k];
   for(const r of [...remotes]) removeRemote(r.id);
   lobbyPlayers=[];
 }
 function cleanupNet(){
   cancelQuickSearch();
-  teardownPeer();
+  teardownChannel();
 }
 
 /* ---- bot fallback: the ONLY time bots appear online ---- */
@@ -998,64 +997,103 @@ function startBotGame(reason){
   toast('🤖 '+reason);
 }
 
-/* ---- PeerJS: host & join ---- */
+/* ---- Supabase Realtime transport: host & join ----
+   ONE broadcast channel per arena, named 'arena-<CODE>'. Host and
+   joiners all subscribe to the SAME channel; every payload carries
+   `from` (the sender's player id) and directed messages also carry
+   `to`, so handleNet(m, fromPid) keeps working unchanged. */
+let rtOnError = null;
+function joinChannel(code, onReady, onError){
+  leaveChannel(false);
+  if(!sb) return false;
+  const name='arena-'+code;
+  const ch=sb.channel(name, {config:{broadcast:{self:false}}});
+  rtChannel=ch; rtChannelName=name; rtReady=false; rtOnError=onError||null;
+  ['snap','lobby','start','full','join','in','kill','end','bye'].forEach(ev=>{
+    ch.on('broadcast', {event:ev}, (msg)=>{
+      if(rtChannel!==ch) return;
+      routeBroadcast(msg && msg.payload);
+    });
+  });
+  let readyFired=false;
+  ch.subscribe(status=>{
+    if(rtChannel!==ch) return;
+    if(status==='SUBSCRIBED'){
+      rtReady=true;
+      netDebug('Channel joined: '+name);
+      if(!readyFired){ readyFired=true; if(onReady) onReady(); }
+    } else if(status==='TIMED_OUT' || status==='CHANNEL_ERROR'){
+      rtReady=false;
+      netDebug('Realtime channel error: '+status);
+      mmStatus('⚠️ Realtime channel error: '+status+'. Try again.');
+      const cb=rtOnError; rtOnError=null;
+      if(cb) cb(status);
+    } else if(status==='CLOSED'){
+      rtReady=false;
+      netDebug('channel closed '+name);
+    }
+  });
+  return true;
+}
+function leaveChannel(sendBye){
+  const ch=rtChannel;
+  rtChannel=null; rtChannelName=null; rtReady=false; rtOnError=null;
+  if(!ch) return;
+  if(sendBye){ try{ ch.send({type:'broadcast', event:'bye', payload:{t:'bye', from:myId}}); }catch(e){} }
+  try{ if(sb) sb.removeChannel(ch); }catch(e){}
+}
+function routeBroadcast(payload){
+  if(!payload || typeof payload!=='object') return;
+  const fromPid=payload.from||null;
+  if(fromPid && fromPid===myId) return;           // never process my own broadcast
+  if(payload.to && payload.to!==myId) return;     // directed at another player
+  handleNet(payload, fromPid);
+}
+function rtSend(msg, toPid){
+  if(!rtChannel || !rtReady) return;
+  const payload=Object.assign({}, msg, {from:myId});
+  if(toPid) payload.to=toPid;
+  const ev = msg.t==='s' ? 'snap' : msg.t;
+  try{ rtChannel.send({type:'broadcast', event:ev, payload}); }catch(e){}
+}
 function startHost(code, opts){
   opts = opts||{};
   const autoStart = !!opts.autoStart, quickArena = !!opts.quickArena;
-  if(typeof Peer==='undefined'){ mmStatus('⚠️ Online library (PeerJS) failed to load — check internet and refresh.'); return; }
+  if(!sb){ mmStatus('⚠️ Cloud (Supabase) unreachable — check internet and refresh.'); return; }
+  teardownChannel();
   readName();
   Net.roomCode = code || genCode();
   isHost = true; netMode='online'; quickMatchHost = autoStart||quickArena;
   arenaNo = opts.arena || 1;
-  peer = new Peer('nsr-'+Net.roomCode);
-  peer.on('open', id=>{
-    myId=id;
-    netDebug('host peer open '+id+' arena '+arenaNo);
-    lobbyPlayers=[{id, name:myName, color:skinColor, host:true}];
+  myId = netPlayerId();
+  mmStatus('🔗 Opening channel arena-'+Net.roomCode+'…');
+  netDebug('host opening channel arena-'+Net.roomCode+' arena '+arenaNo);
+  joinChannel(Net.roomCode, ()=>{
+    lobbyPlayers=[{id:myId, name:myName, color:skinColor, host:true}];
     if(quickArena){
       // Arena host: drop straight into the LIVE arena — no waiting
       // lobby. Anyone can late-join this arena at any moment.
       qm.phase='hosting';
-      startGame({mode:'online', players:[{id, name:myName, color:skinColor}], arena:arenaNo});
-      setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+id+' — waiting for players… anyone can join anytime!', 'online');
+      startGame({mode:'online', players:[{id:myId, name:myName, color:skinColor}], arena:arenaNo});
+      setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · code '+Net.roomCode+' · channel arena-'+Net.roomCode+' — waiting for players… anyone can join anytime!', 'online');
       startAloneTimer();
       return;
     }
     showLobby();
-    $('lobbyStatus').textContent = autoStart ? '🎮 Real player found! They are connecting…' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+id+' — waiting for players…';
-  });
-  peer.on('connection', conn=>{
-    netDebug('incoming connection from '+conn.peer);
-    conns[conn.peer]=conn;
-    conn.on('open', ()=>{
-      // wait for their 'join' message with name/color
-    });
-    conn.on('data', m=>handleNet(m, conn.peer));
-    conn.on('close', ()=>{
-      delete conns[conn.peer];
-      lobbyPlayers=lobbyPlayers.filter(p=>p.id!==conn.peer);
-      renderLobby();
-      const rs=remotes.find(r=>r.id===conn.peer);
-      if(rs && state==='playing'){ toast('👋 '+rs.name+' left the match'); killSnake(rs,'left'); }
-      removeRemote(conn.peer);
-      netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
-      if(netMode==='online' && state==='playing')
-        setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+lobbyPlayers.length+'/'+ARENA_MAX+' players', 'online');
-    });
-  });
-  peer.on('error', err=>{
-    netDebug('host peer error '+(err&&err.type?err.type:'unknown'));
-    if(err && err.type==='unavailable-id'){ teardownPeer(); isHost=true; netMode='online'; startHost(Net.roomCode, opts); }
-    else mmStatus('⚠️ Connection error: '+(err&&err.type?err.type:'unknown')+'. Try again.');
+    $('lobbyStatus').textContent = autoStart ? '🎮 Real player found! They are connecting…' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · channel arena-'+Net.roomCode+' — waiting for players…';
+  }, (status)=>{
+    netDebug('host channel failed '+status);
   });
 }
 function startJoin(code, opts){
   opts = opts||{};
   const auto = !!opts.auto, quick = !!opts.quick;
-  if(typeof Peer==='undefined'){ mmStatus('⚠️ Online library (PeerJS) failed to load — check internet and refresh.'); return; }
+  if(!sb){ mmStatus('⚠️ Cloud (Supabase) unreachable — check internet and refresh.'); return; }
+  teardownChannel();
   readName();
   Net.roomCode=code; isHost=false; netMode='online'; quickAutoJoin=auto;
   if(opts.arena) arenaNo=opts.arena;
+  myId = netPlayerId();
   if(quick){
     // watchdog: connected but the host never started us (stale arena)
     // epoch-guarded so an old watchdog cannot kill a retry in flight
@@ -1072,42 +1110,33 @@ function startJoin(code, opts){
     }, 12000));
   }
   mmStatus('🔗 Connecting to '+(quick?('Arena '+arenaNo):('room '+code))+'…');
-  netDebug('join attempt -> nsr-'+code+(quick?(' arena '+arenaNo):''));
-  peer = new Peer();
-  const joinPeer=peer; let joinPeerOpened=false;
-  setTimeout(()=>{ if(!joinPeerOpened && peer===joinPeer){ mmStatus('⏳ Peer not opening — check connection…'); netDebug('join peer not opening -> nsr-'+code); } }, 4000);
-  peer.on('open', id=>{
-    joinPeerOpened=true;
-    myId=id;
-    mmStatus('🔗 Peer ready — connecting to nsr-'+code+'…');
-    netDebug('join peer open — dialing nsr-'+code);
-    hostConn = peer.connect('nsr-'+code, {reliable:true});
-    hostConn.on('open', ()=>{ netDebug('join connected to nsr-'+code); hostConn.send({t:'join', name:myName, color:skinColor}); });
-    hostConn.on('data', m=>handleNet(m, null));
-    hostConn.on('close', ()=>{ if(netMode==='online') hostLeft(); });
+  netDebug('join attempt -> arena-'+code+(quick?(' arena '+arenaNo):''));
+  joinChannel(code, ()=>{
+    mmStatus('🔗 Channel joined: arena-'+code+' — saying hello to the host…');
+    netDebug('join channel ready — sending join -> arena-'+code);
+    sendJoinHello();
+    // the host may have subscribed a moment after us — repeat the
+    // hello a couple of times until the match actually starts
+    [2500, 6000].forEach(ms=>{
+      qmTimers.push(setTimeout(()=>{
+        if(netMode==='online' && !isHost && state!=='playing' && Net.roomCode===code) sendJoinHello();
+      }, ms));
+    });
+  }, (status)=>{
+    if(quick && qm.phase==='joining'){ onArenaJoinFailed(code); }
   });
-  peer.on('error', err=>{
-    const etype=(err&&err.type)?err.type:'unknown';
-    netDebug('join failed '+etype+' -> nsr-'+code);
-    if(err && err.type==='peer-unavailable'){
-      if(quickAutoJoin && quickJoinRetries<8){
-        quickJoinRetries++;
-        mmStatus('⚠️ Connection failed: peer-unavailable — retrying…');
-        setTimeout(()=>{ if(quickAutoJoin) startJoin(code, {auto:true, quick:true, arena:arenaNo}); }, 1800);
-        return;
+  if(!quick){
+    // room-code join: if no host answers, say so plainly
+    qmTimers.push(setTimeout(()=>{
+      if(netMode==='online' && !isHost && state!=='playing' && $('lobby').classList.contains('hidden')){
+        mmStatus('⚠️ No host answered in room "'+code+'" — check the code, or host your own room!');
+        netDebug('join no answer -> arena-'+code);
       }
-      quickAutoJoin=false;
-      if(qm.phase==='joining'){ // arena host vanished mid-join -> next arena
-        onArenaJoinFailed(code);
-        return;
-      }
-      cleanupNet(); state='menu';
-      $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
-      mmStatus('⚠️ Connection failed: peer-unavailable — room "'+code+'" not found. Check the code — or host your own room!');
-      return;
-    }
-    mmStatus('⚠️ Connection failed: '+etype+'. Try again.');
-  });
+    }, 10000));
+  }
+}
+function sendJoinHello(){
+  rtSend({t:'join', name:myName, color:skinColor}, null);
 }
 function showLobby(){
   $('menu').classList.add('hidden');
@@ -1120,7 +1149,7 @@ function renderLobby(){
   $('lobbyList').innerHTML = lobbyPlayers.map(p=>
     `<li><span style="color:#${p.color.toString(16).padStart(6,'0')}">●</span> <b>${esc(p.name)}</b>${p.host?' <span class="host-tag">HOST</span>':''}${p.id===myId?' (YOU)':''}</li>`
   ).join('') || '<li>Waiting…</li>';
-  if(isHost) $('lobbyStatus').textContent = lobbyPlayers.length>1 ? lobbyPlayers.length+' players in the room — press START!' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+myId+' — waiting for players…';
+  if(isHost) $('lobbyStatus').textContent = lobbyPlayers.length>1 ? lobbyPlayers.length+' players in the room — press START!' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · channel arena-'+Net.roomCode+' — waiting for players…';
 }
 function hostStartMatch(){
   if(!isHost) return;
@@ -1131,6 +1160,22 @@ function hostStartMatch(){
 function removeRemote(id){
   const i=remotes.findIndex(r=>r.id===id);
   if(i>=0){ const r=remotes[i]; try{ scene.remove(r.mesh); scene.remove(r.glow); scene.remove(r.shine); scene.remove(r.headGroup); }catch(e){} remotes.splice(i,1); }
+}
+/* host: a player left — said 'bye', or went silent (see the prune
+   timer below). Same cleanup the old connection-close handler did. */
+function hostRemovePlayer(pid){
+  if(!pid) return;
+  delete remoteLastSeen[pid];
+  const known = lobbyPlayers.some(p=>p.id===pid) || remotes.some(r=>r.id===pid);
+  if(!known) return;
+  lobbyPlayers=lobbyPlayers.filter(p=>p.id!==pid);
+  renderLobby();
+  const rs=remotes.find(r=>r.id===pid);
+  if(rs && state==='playing'){ toast('👋 '+rs.name+' left the match'); killSnake(rs,'left'); }
+  removeRemote(pid);
+  netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
+  if(netMode==='online' && state==='playing')
+    setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+lobbyPlayers.length+'/'+ARENA_MAX+' players', 'online');
 }
 function addRemote(id, name, color){
   removeRemote(id);
@@ -1175,12 +1220,20 @@ function retireBotForRealPlayer(){
   const b=bots.find(x=>x.alive);
   if(b){ b.alive=false; b.respawnIn=99999; b.mesh.visible=false; b.headGroup.visible=false; }
 }
+/* host: drop remotes whose inputs stopped ~10s ago (tab closed,
+   network died, no 'bye' received) so a vanished player never
+   lingers in the arena */
+setInterval(()=>{
+  if(netMode!=='online' || !isHost || state!=='playing') return;
+  const now=Date.now();
+  for(const pid of Object.keys(remoteLastSeen)){
+    if(now-remoteLastSeen[pid] > 10000) hostRemovePlayer(pid);
+  }
+}, 2000);
 
 /* ---- network messages ---- */
-function netSendAll(msg){
-  for(const id of Object.keys(conns)){ try{ conns[id].send(msg); }catch(e){} }
-}
-function netSendTo(id, msg){ try{ conns[id] && conns[id].send(msg); }catch(e){} }
+function netSendAll(msg){ rtSend(msg, null); }
+function netSendTo(id, msg){ rtSend(msg, id); }
 function handleNet(m, fromPid){
   if(!m || !m.t) return;
   if(m.t==='join' && isHost){
@@ -1188,11 +1241,11 @@ function handleNet(m, fromPid){
     // finds this arena full is told so and hops to the next arena.
     if(lobbyPlayers.length >= ARENA_MAX){
       netSendTo(fromPid, {t:'full', arena:arenaNo});
-      setTimeout(()=>{ try{ conns[fromPid] && conns[fromPid].close(); }catch(e){} }, 350);
       return;
     }
     const p={id:fromPid, name:String(m.name||'Player').slice(0,14), color:(typeof m.color==='number'?m.color:0x00e5ff), host:false};
     if(!lobbyPlayers.find(x=>x.id===fromPid)) lobbyPlayers.push(p);
+    if(fromPid) remoteLastSeen[fromPid]=Date.now();
     renderLobby();
     netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
     if(state==='playing'){
@@ -1211,6 +1264,7 @@ function handleNet(m, fromPid){
   else if(m.t==='lobby' && !isHost){
     lobbyPlayers=m.players||[];
     if(m.arena) arenaNo=m.arena;
+    if(state==='playing'){ arenaCountFromHost=lobbyPlayers.length; return; }
     showLobby();
     $('lobbyStatus').textContent='Connected! Waiting for the host to start…';
     renderLobby();
@@ -1225,8 +1279,12 @@ function handleNet(m, fromPid){
     onArenaFull(m.arena);
   }
   else if(m.t==='in' && isHost){
+    if(fromPid) remoteLastSeen[fromPid]=Date.now();
     const rs=remotes.find(r=>r.id===fromPid);
     if(rs && rs.alive){ rs.netIn={a:m.a, b:m.b?1:0, at:Date.now()}; }
+  }
+  else if(m.t==='bye' && isHost){
+    hostRemovePlayer(fromPid);
   }
   else if(m.t==='s' && !isHost){
     applySnapshot(m);
@@ -1247,8 +1305,8 @@ function hostLeft(){
   }
   remotes.length=0;
   botsInArena=true; arenaCountFromHost=0;
-  netMode='offline'; isHost=false; hostConn=null;
-  try{ if(peer) peer.destroy(); }catch(e){} peer=null;
+  netMode='offline'; isHost=false;
+  leaveChannel(false);
   setNetStatus('🤖 Host left — bots took over the arena.', 'bots');
   toast('⚠️ Host left — bots took over!');
   $('lobby').classList.add('hidden');
@@ -1390,7 +1448,7 @@ function qmMarkJoined(){
 }
 function onArenaFull(n){
   if(Net.roomCode) arenaFullCodes[Net.roomCode]=1;
-  teardownPeer();
+  teardownChannel();
   if(qm.phase==='joining' || qm.phase==='joined' || qm.phase==='searching'){
     qm.phase='searching'; qm.searching=true; quickAutoJoin=false;
     mmStatus('🏟 Arena '+(n||arenaNo)+' is full ('+ARENA_MAX+'/'+ARENA_MAX+') — finding the next arena…');
@@ -1406,9 +1464,9 @@ function onArenaJoinFailed(code){
   qm.joinFails[code] = (qm.joinFails[code]||0)+1;
   const fails = qm.joinFails[code];
   const arenaNoSaved = arenaNo;
-  teardownPeer();
+  teardownChannel();
   if(fails < 3){
-    // Transient failure (e.g. host PeerJS id not registered yet):
+    // Transient failure (e.g. host channel not subscribed yet):
     // retry the SAME arena before blacklisting it.
     qm.phase='joining'; qm.searching=false;
     quickJoinRetries=0;
@@ -1477,7 +1535,7 @@ const Net = {
   join: (c)=>startJoin(c, {}),
   buildSnapshot, applySnapshot, cleanup: cleanupNet,
 };
-window.addEventListener('beforeunload', ()=>{ try{ qmDeleteRow(); }catch(e){} });
+window.addEventListener('beforeunload', ()=>{ try{ qmDeleteRow(); }catch(e){} try{ if(rtChannel) rtChannel.send({type:'broadcast', event:'bye', payload:{t:'bye', from:myId}}); }catch(e){} });
 
 
 
@@ -1736,9 +1794,9 @@ function animate(){
     if(netMode==='online' && !isHost){
       // ---- CLIENT: predict my own movement; the host decides everything else
       inputTimer+=dt;
-      if(inputTimer>0.066 && hostConn){
+      if(inputTimer>0.066 && rtChannel){
         inputTimer=0;
-        try{ hostConn.send({t:'in', a:+player.targetAngle.toFixed(3), b:player.boost?1:0}); }catch(e){}
+        rtSend({t:'in', a:+player.targetAngle.toFixed(3), b:player.boost?1:0}, null);
       }
       moveSnake(player, dt);
       updateSnakeMesh(player, t);
