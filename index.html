@@ -73,7 +73,7 @@
   #popups{position:fixed;inset:0;pointer-events:none;z-index:12;overflow:hidden}
   .score-pop{position:absolute;transform:translate(-50%,-50%);font-family:'Orbitron',monospace;font-weight:900;font-size:17px;color:#7dffab;text-shadow:0 0 10px rgba(57,255,106,.8),0 2px 4px rgba(0,0,0,.65);animation:popfly .85s ease-out forwards;white-space:nowrap}
   @keyframes popfly{0%{opacity:0;margin-top:8px}15%{opacity:1}100%{opacity:0;margin-top:-46px}}
-  /* ---------- Floating anywhere-joystick ---------- */
+  /* ---------- Invisible drag steering (joystick visuals stay hidden) ---------- */
   #joy{position:fixed;width:124px;height:124px;border-radius:50%;border:2px solid rgba(0,229,255,.55);background:radial-gradient(circle,rgba(10,16,40,.22),rgba(10,16,40,.55));z-index:14;pointer-events:none;transform:translate(-50%,-50%);box-shadow:inset 0 0 18px rgba(0,229,255,.25)}
   #joyKnob{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#8affc1,#12b76a 60%,#0a7a4a);border:2px solid rgba(255,255,255,.65);transform:translate(-50%,-50%);box-shadow:0 0 14px rgba(57,255,106,.5)}
   .name-input{font-family:'Rubik',sans-serif;font-size:16px;font-weight:600;text-align:center;color:#eaf6ff;background:#131a3d;border:1px solid #3a4a7a;border-radius:12px;padding:11px 14px;width:min(280px,80%);margin-top:14px;outline:none}
@@ -127,7 +127,7 @@
     <p class="tagline">A glowing 3D snake arena. Eat. Grow. Trap. Survive.</p>
     <div class="howto">
       🟢 <b>Eat glowing orbs</b> to grow longer &amp; score points.<br>
-      🐍 <b>Steer with your mouse</b> — on mobile, <b>touch anywhere</b>: a <b>floating joystick</b> pops up right under your thumb, drag it to steer. <span class="k">WASD</span>/<span class="k">←↑↓→</span> also work.<br>
+      🐍 <b>Steer with your mouse</b> — on mobile, <b>touch anywhere and drag</b> to steer: steering is invisible, no joystick is shown, so the screen stays clean. <span class="k">WASD</span>/<span class="k">←↑↓→</span> also work.<br>
       🏟 <b>Arenas:</b> max <b>10 players per arena</b> — join <b>anytime</b>, even mid-match! If an arena is full, you land in the next one (Arena 2, 3…). Your arena &amp; player count show at the top.<br>
       🌀 <b>Your own tail is safe</b> — slither straight through it, no crash!<br>
       ⚡ Hold <span class="k">Space</span>, mouse button or <b>BOOST</b> to sprint — it costs length!<br>
@@ -277,8 +277,8 @@
    drops you into a live arena ANY time (mid-match late join);
    when an arena is full the next player opens/joins Arena 2,
    3, … The arena number + live player count show on screen.
-   CONTROLS (mobile): floating anywhere-joystick — touch
-   anywhere and a joystick appears right there; drag to steer.
+   CONTROLS (mobile): invisible drag steering — touch anywhere
+   and drag to steer; no joystick is shown, the screen stays clean.
    ORBS: a balanced count of plain glossy beads (no halo glow);
    each eaten orb is replaced so the arena never runs dry, and
    eating gives a gulp pulse, a +score popup and visible growth.
@@ -923,7 +923,7 @@ let netTick = 0, snapTimer = 0, inputTimer = 0, lastSnapAt = 0;
 let pendingDeaths = [];         // host: [{id, cause}] since last snapshot
 let quickMatchHost = false, quickAutoJoin = false, quickJoinRetries = 0;
 let qmTimers = [];
-const qm = { searching:false, rowId:null, poll:null, startedAt:0, claimed:false, phase:'' };
+const qm = { searching:false, rowId:null, poll:null, startedAt:0, claimed:false, phase:'', hostArmedAt:0, joinFails:{}, joinEpoch:0 };
 
 function setNetStatus(text, kind){
   const el=$('netStatus');
@@ -1045,7 +1045,11 @@ function startJoin(code, opts){
   if(opts.arena) arenaNo=opts.arena;
   if(quick){
     // watchdog: connected but the host never started us (stale arena)
+    // epoch-guarded so an old watchdog cannot kill a retry in flight
+    qm.joinEpoch = (qm.joinEpoch||0)+1;
+    const joinEpoch = qm.joinEpoch;
     qmTimers.push(setTimeout(()=>{
+      if(qm.joinEpoch!==joinEpoch) return;
       if(qm.phase==='joining' && state!=='playing' && netMode==='online' && !isHost) onArenaJoinFailed(code);
     }, 12000));
   }
@@ -1115,8 +1119,9 @@ function addRemote(id, name, color){
 /* ---- arena host helpers: bot fill + swap-out ----
    An online arena starts with REAL players only. If the host is
    still alone after ~25s, bots fill the scene (and the game says
-   so). When a real player late-joins a bot-filled arena that is
-   at the 10-snake scene cap, one bot retires to make room. */
+   so). When a real player late-joins a bot-filled arena, one bot
+   retires immediately to make room — on EVERY late join, not only
+   when the arena is full, so real players always replace bots. */
 let aloneTimer=null, botsInArena=false;
 function clearAloneTimer(){ if(aloneTimer){ clearTimeout(aloneTimer); aloneTimer=null; } }
 function startAloneTimer(){
@@ -1140,7 +1145,6 @@ function fillArenaBots(){
 }
 function retireBotForRealPlayer(){
   if(!botsInArena) return;
-  if(allSnakes().filter(s=>s.alive).length < ARENA_MAX) return;
   const b=bots.find(x=>x.alive);
   if(b){ b.alive=false; b.respawnIn=99999; b.mesh.visible=false; b.headGroup.visible=false; }
 }
@@ -1326,13 +1330,21 @@ async function qmArenaStep(){
   const arenas=arenaDirectory(rows).filter(a=>!(a.code in arenaFullCodes));
   const open=arenas.find(a=>a.count<ARENA_MAX);
   if(open){
+    qm.hostArmedAt=0;
     qm.searching=false; qm.phase='joining'; quickAutoJoin=true; quickJoinRetries=0;
     arenaNo=open.n;
     mmStatus('🎮 Joining <b>Arena '+open.n+'</b> ('+open.count+'/'+ARENA_MAX+' players)…');
     startJoin(open.code, {auto:true, quick:true, arena:open.n});
     return;
   }
+  if(!qm.hostArmedAt){
+    qm.hostArmedAt = Date.now() + 3000 + Math.random()*4000;
+    mmStatus('⏳ Waiting a moment for an arena to appear…');
+    return;
+  }
+  if(Date.now() < qm.hostArmedAt) return;
   const nextN = arenas.length ? Math.max.apply(null, arenas.map(a=>a.n))+1 : 1;
+  qm.hostArmedAt=0;
   becomeArenaHost(nextN);
 }
 function becomeArenaHost(n){
@@ -1363,13 +1375,48 @@ function onArenaFull(n){
   }
 }
 function onArenaJoinFailed(code){
-  arenaFullCodes[code]=1;   // unreachable this session — skip it
+  qm.joinFails = qm.joinFails || {};
+  qm.joinFails[code] = (qm.joinFails[code]||0)+1;
+  const fails = qm.joinFails[code];
+  const arenaNoSaved = arenaNo;
   teardownPeer();
+  if(fails < 3){
+    // Transient failure (e.g. host PeerJS id not registered yet):
+    // retry the SAME arena before blacklisting it.
+    qm.phase='joining'; qm.searching=false;
+    quickJoinRetries=0;
+    const delay = fails*2000;   // 2s, then 4s backoff
+    mmStatus('🔍 Arena host not ready yet — retrying the same arena…');
+    qmTimers.push(setTimeout(()=>{
+      if(qm.phase!=='joining') return;
+      quickAutoJoin=true;
+      startJoin(code, {auto:true, quick:true, arena:arenaNoSaved});
+    }, delay));
+    return;
+  }
+  arenaFullCodes[code]=1;   // unreachable this session — skip it
   quickAutoJoin=false;
-  if(quickJoinRetries>3){ startBotGame('The arena host could not be reached — bots filled the arena.'); return; }
+  if(Date.now() - qm.startedAt < 20000){
+    qm.phase='searching'; qm.searching=true;
+    mmStatus('🔍 That arena went quiet — looking for another arena…');
+    qmArenaStep();
+    return;
+  }
+  // 20s+ spent searching: fetch the directory once more — only fall
+  // back to bots when no arena exists at all.
   qm.phase='searching'; qm.searching=true;
   mmStatus('🔍 That arena went quiet — looking for another arena…');
-  qmArenaStep();
+  fetchLiveRows().then(rows=>{
+    if(qm.phase!=='searching' || !qm.searching) return;
+    const arenas = arenaDirectory(rows).filter(a=>!(a.code in arenaFullCodes));
+    if(arenas.length){
+      qmArenaStep();
+    } else {
+      startBotGame('No live arena could be reached — bots filled the arena.');
+    }
+  }).catch(()=>{
+    startBotGame('No live arena could be reached — bots filled the arena.');
+  });
 }
 function startQuickMatch(){
   readName(); ac();
@@ -1381,7 +1428,7 @@ function startQuickMatch(){
     qmTimers.push(setTimeout(()=>{ if(state==='menu') startBotGame('Cloud unreachable right now, so no real players could be found.'); }, 1200));
     return;
   }
-  qm.searching=true; qm.phase='searching'; qm.startedAt=Date.now(); qm.claimed=false; qm.rowId=qmRowId();
+  qm.searching=true; qm.phase='searching'; qm.startedAt=Date.now(); qm.claimed=false; qm.rowId=qmRowId(); qm.hostArmedAt=0; qm.joinFails={};
   sb.from('snake_queue').insert({id:qm.rowId, player_id:netPlayerId(), player_name:myName, mode:'quick', map:'arena', status:'waiting', room_code:null, host_id:null}).then(res=>{
     if(res.error){
       qm.searching=false; qm.phase='';
@@ -1526,9 +1573,10 @@ function keySteer(){
   if(keys['KeyD']||keys['ArrowRight']) dx+=1;
   if(dx||dz) player.targetAngle=Math.atan2(dz,dx);
 }
-/* FLOATING ANYWHERE-JOYSTICK (mobile): touch ANYWHERE on the screen
-   and a joystick appears right under your thumb; drag it to steer,
-   lift your finger and it vanishes. No fixed joystick position.
+/* INVISIBLE DRAG STEERING (mobile): touch ANYWHERE on the screen
+   and drag to steer — no joystick is shown, the screen stays clean.
+   joyCX/joyCY still track the touch origin and joyMove still sets
+   targetAngle; only the joystick visuals stay hidden.
    The BOOST button stays as its own on-screen button. */
 const joyEl=$('joy'), joyKnob=$('joyKnob');
 const JOY_R=46;                       // knob travel radius (px)
@@ -1537,7 +1585,7 @@ function joyShow(x, y){
   joyCX=x; joyCY=y;
   joyEl.style.left=x+'px'; joyEl.style.top=y+'px';
   joyKnob.style.left='50%'; joyKnob.style.top='50%';
-  joyEl.classList.remove('hidden');
+  // steering is invisible: #joy stays hidden, screen stays clean
 }
 function joyMove(x, y){
   if(!player) return;
