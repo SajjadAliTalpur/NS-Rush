@@ -147,6 +147,7 @@
       <button class="mode-btn" id="joinBtn">🚪 JOIN ROOM</button>
     </div>
     <div id="mmStatus"></div>
+    <div class="netDebugLine tiny" style="margin-top:4px;font-size:11px;opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
     <div class="tiny">Quick Match drops you straight into a <b>live arena</b> with real players — join anytime, max 10 per arena, full arenas overflow into the next one. Only if an arena stays empty do bots fill it — and the game will tell you. Best length: <span id="menuBest">0</span> &nbsp;·&nbsp; Best score: <span id="menuBestScore">0</span></div>
   </div>
 </div>
@@ -158,6 +159,7 @@
     <div class="room-code" id="lobbyCode">----</div>
     <ul id="lobbyList"></ul>
     <p class="tagline" id="lobbyStatus">Waiting for players…</p>
+    <div class="netDebugLine tiny" style="margin-top:6px;font-size:11px;opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
     <button class="big-btn" id="startBtn">▶ &nbsp;START MATCH</button><br>
     <button class="ghost-btn" id="cancelLobbyBtn">Cancel</button>
   </div>
@@ -933,6 +935,13 @@ function setNetStatus(text, kind){
   el.classList.toggle('bots', kind==='bots');
 }
 function mmStatus(t){ const el=$('mmStatus'); if(el) el.innerHTML=t||''; }
+/* diagnostics only: ONE debug line, overwritten on each network event */
+function netDebug(msg){
+  const d=new Date();
+  const t=[d.getHours(),d.getMinutes(),d.getSeconds()].map(x=>String(x).padStart(2,'0')).join(':');
+  const txt='last net: '+msg+' '+t;
+  document.querySelectorAll('.netDebugLine').forEach(el=>{ el.textContent=txt; });
+}
 function readName(){
   const v=($('playerName').value||'').trim();
   myName = v ? v.slice(0,14) : 'Player'+Math.floor(Math.random()*90+10);
@@ -981,6 +990,7 @@ function cleanupNet(){
 
 /* ---- bot fallback: the ONLY time bots appear online ---- */
 function startBotGame(reason){
+  netDebug('bot fallback — '+reason);
   cleanupNet();
   setNetStatus('🤖 Bots filled the arena — '+reason, 'bots');
   mmStatus('🤖 '+reason);
@@ -1000,20 +1010,22 @@ function startHost(code, opts){
   peer = new Peer('nsr-'+Net.roomCode);
   peer.on('open', id=>{
     myId=id;
+    netDebug('host peer open '+id+' arena '+arenaNo);
     lobbyPlayers=[{id, name:myName, color:skinColor, host:true}];
     if(quickArena){
       // Arena host: drop straight into the LIVE arena — no waiting
       // lobby. Anyone can late-join this arena at any moment.
       qm.phase='hosting';
       startGame({mode:'online', players:[{id, name:myName, color:skinColor}], arena:arenaNo});
-      setNetStatus('🌐 ONLINE · Arena '+arenaNo+' — waiting for real players… anyone can join anytime!', 'online');
+      setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+id+' — waiting for players… anyone can join anytime!', 'online');
       startAloneTimer();
       return;
     }
     showLobby();
-    $('lobbyStatus').textContent = autoStart ? '🎮 Real player found! They are connecting…' : 'Share the code — waiting for players…';
+    $('lobbyStatus').textContent = autoStart ? '🎮 Real player found! They are connecting…' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+id+' — waiting for players…';
   });
   peer.on('connection', conn=>{
+    netDebug('incoming connection from '+conn.peer);
     conns[conn.peer]=conn;
     conn.on('open', ()=>{
       // wait for their 'join' message with name/color
@@ -1032,6 +1044,7 @@ function startHost(code, opts){
     });
   });
   peer.on('error', err=>{
+    netDebug('host peer error '+(err&&err.type?err.type:'unknown'));
     if(err && err.type==='unavailable-id'){ teardownPeer(); isHost=true; netMode='online'; startHost(Net.roomCode, opts); }
     else mmStatus('⚠️ Connection error: '+(err&&err.type?err.type:'unknown')+'. Try again.');
   });
@@ -1050,22 +1063,36 @@ function startJoin(code, opts){
     const joinEpoch = qm.joinEpoch;
     qmTimers.push(setTimeout(()=>{
       if(qm.joinEpoch!==joinEpoch) return;
-      if(qm.phase==='joining' && state!=='playing' && netMode==='online' && !isHost) onArenaJoinFailed(code);
+      if(qm.phase==='joining' && state!=='playing' && netMode==='online' && !isHost){
+        const attempt=((qm.joinFails&&qm.joinFails[code])||0)+1;
+        mmStatus('⏳ Still connecting to Arena '+arenaNo+'… (attempt '+attempt+')');
+        netDebug('join watchdog fired arena '+arenaNo+' attempt '+attempt);
+        onArenaJoinFailed(code);
+      }
     }, 12000));
   }
   mmStatus('🔗 Connecting to '+(quick?('Arena '+arenaNo):('room '+code))+'…');
+  netDebug('join attempt -> nsr-'+code+(quick?(' arena '+arenaNo):''));
   peer = new Peer();
+  const joinPeer=peer; let joinPeerOpened=false;
+  setTimeout(()=>{ if(!joinPeerOpened && peer===joinPeer){ mmStatus('⏳ Peer not opening — check connection…'); netDebug('join peer not opening -> nsr-'+code); } }, 4000);
   peer.on('open', id=>{
+    joinPeerOpened=true;
     myId=id;
+    mmStatus('🔗 Peer ready — connecting to nsr-'+code+'…');
+    netDebug('join peer open — dialing nsr-'+code);
     hostConn = peer.connect('nsr-'+code, {reliable:true});
-    hostConn.on('open', ()=>{ hostConn.send({t:'join', name:myName, color:skinColor}); });
+    hostConn.on('open', ()=>{ netDebug('join connected to nsr-'+code); hostConn.send({t:'join', name:myName, color:skinColor}); });
     hostConn.on('data', m=>handleNet(m, null));
     hostConn.on('close', ()=>{ if(netMode==='online') hostLeft(); });
   });
   peer.on('error', err=>{
+    const etype=(err&&err.type)?err.type:'unknown';
+    netDebug('join failed '+etype+' -> nsr-'+code);
     if(err && err.type==='peer-unavailable'){
       if(quickAutoJoin && quickJoinRetries<8){
         quickJoinRetries++;
+        mmStatus('⚠️ Connection failed: peer-unavailable — retrying…');
         setTimeout(()=>{ if(quickAutoJoin) startJoin(code, {auto:true, quick:true, arena:arenaNo}); }, 1800);
         return;
       }
@@ -1076,10 +1103,10 @@ function startJoin(code, opts){
       }
       cleanupNet(); state='menu';
       $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
-      mmStatus('⚠️ Room "'+code+'" not found. Check the code — or host your own room!');
+      mmStatus('⚠️ Connection failed: peer-unavailable — room "'+code+'" not found. Check the code — or host your own room!');
       return;
     }
-    mmStatus('⚠️ Connection error: '+(err&&err.type?err.type:'unknown')+'. Try again.');
+    mmStatus('⚠️ Connection failed: '+etype+'. Try again.');
   });
 }
 function showLobby(){
@@ -1093,7 +1120,7 @@ function renderLobby(){
   $('lobbyList').innerHTML = lobbyPlayers.map(p=>
     `<li><span style="color:#${p.color.toString(16).padStart(6,'0')}">●</span> <b>${esc(p.name)}</b>${p.host?' <span class="host-tag">HOST</span>':''}${p.id===myId?' (YOU)':''}</li>`
   ).join('') || '<li>Waiting…</li>';
-  if(isHost) $('lobbyStatus').textContent = lobbyPlayers.length>1 ? lobbyPlayers.length+' players in the room — press START!' : 'Share the code — waiting for players…';
+  if(isHost) $('lobbyStatus').textContent = lobbyPlayers.length>1 ? lobbyPlayers.length+' players in the room — press START!' : 'Arena '+arenaNo+' · code '+Net.roomCode+' · peer '+myId+' — waiting for players…';
 }
 function hostStartMatch(){
   if(!isHost) return;
