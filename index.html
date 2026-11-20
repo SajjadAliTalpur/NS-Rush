@@ -746,6 +746,13 @@ function pointAtDistance(s, dist){
   const last=s.history[s.history.length-1];
   return {x:last.x, z:last.z};
 }
+/* segPos only, no mesh writes — used when this screen must stay
+   frozen (a dead host still simulating the room for everyone else):
+   collisions keep using fresh body positions, nothing repaints */
+function refreshSegPos(s){
+  const n=segCount(s); s.segPos.length=0;
+  for(let i=0;i<n;i++) s.segPos.push(pointAtDistance(s, i*SPACING));
+}
 function updateSnakeMesh(s, t){
   const n = segCount(s);
   s.segPos.length = 0;
@@ -862,7 +869,8 @@ function killSnake(s, cause){
     // of this function) and PLAY AGAIN rejoins me as a client. 'end'
     // is sent only when the host actually leaves (menu button), and
     // even then the clients migrate to a new host instead of dying.
-    setTimeout(()=>{ $('gameover').classList.remove('hidden'); $('hud').classList.add('hidden'); $('board').classList.add('hidden'); }, 650);
+    const tt=$('toast'); tt.style.opacity=0; clearTimeout(toast._t);
+    setTimeout(()=>{ if(state!=='over') return; $('gameover').classList.remove('hidden'); $('hud').classList.add('hidden'); $('board').classList.add('hidden'); $('arenaBadge').classList.add('hidden'); }, 650);
   } else {
     sfx.botDie();
     if(s.bot) s.respawnIn=3;   // bots respawn; real players stay out
@@ -881,6 +889,7 @@ function respawnBot(b){
   b.score=Math.floor(b.length*10);
 }
 function toast(msg){
+  if(state==='over') return;   // nothing pops over the game-over panel
   const t=$('toast'); t.textContent=msg; t.style.opacity=1;
   clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.opacity=0, 1400);
 }
@@ -1266,7 +1275,10 @@ setInterval(()=>{
     return;
   }
   const inLobby = !$('lobby').classList.contains('hidden');
-  if(state!=='playing' && !inLobby) return;
+  // 'over' counts too: a dead player can still be elected host —
+  // promoteToHost then keeps their screen frozen on the game-over
+  // panel while they simulate the room for everyone else
+  if(state!=='playing' && state!=='over' && !inLobby) return;
   if(!currentHostId || !lastHostMsgAt) return;
   if(Date.now()-lastHostMsgAt > 3500) onHostLost('timeout');
 }, 1000);
@@ -1279,7 +1291,17 @@ function handleNet(m, fromPid){
   // host liveness: any word from the current host resets the
   // migration watchdog; a snapshot's sender IS the host by definition
   if(fromPid && currentHostId && fromPid===currentHostId) lastHostMsgAt=Date.now();
-  if(m.t==='s' && fromPid){ if(!currentHostId) currentHostId=fromPid; lastHostMsgAt=Date.now(); }
+  if(m.t==='s'){
+    // ONE snapshot stream only. A stale or duplicate host (an old
+    // host that never stopped, a double promotion) must never reach
+    // the scene: two streams alternating strobes the whole arena
+    // between two different simulations — the 2-player flicker.
+    if(!fromPid || deadHosts[fromPid]) return;
+    if(isHost){ if(fromPid!==myId) resolveDualHost(fromPid); return; }
+    if(currentHostId && fromPid!==currentHostId) return;
+    if(!currentHostId) currentHostId=fromPid;
+    lastHostMsgAt=Date.now();
+  }
   if(m.t==='join' && isHost){
     // ARENA CAP: max 10 real players per arena/scene — a joiner who
     // finds this arena full is told so and hops to the next arena.
@@ -1310,7 +1332,7 @@ function handleNet(m, fromPid){
     const lh=lobbyPlayers.find(p=>p.host);
     if(lh) currentHostId=lh.id;
     if(m.arena) arenaNo=m.arena;
-    if(state==='playing'){ arenaCountFromHost=lobbyPlayers.length; return; }
+    if(state==='playing' || state==='over'){ arenaCountFromHost=lobbyPlayers.length; return; }   // never flash the lobby over the game-over panel
     showLobby();
     $('lobbyStatus').textContent='Connected! Waiting for the host to start…';
     renderLobby();
@@ -1351,11 +1373,19 @@ function handleNet(m, fromPid){
     promoteToHost();
   }
   else if(m.t==='host' && !isHost){
-    // a new host claimed the room — follow it seamlessly
+    // a new host claimed the room — follow it seamlessly. A host
+    // already known GONE does not get to reclaim the room while the
+    // current host is alive and talking (that resurrect-and-flip
+    // was another flicker source); if the current host has gone
+    // silent, believe the claim instead and un-mark the claimant.
+    if(fromPid && deadHosts[fromPid] && currentHostId && currentHostId!==fromPid && Date.now()-lastHostMsgAt<3500) return;
     if(fromPid && fromPid!==currentHostId) netDebug('host migrated to '+(m.name||'new host'));
-    if(fromPid) currentHostId=fromPid;
+    if(fromPid){ currentHostId=fromPid; delete deadHosts[fromPid]; }
     lastHostMsgAt=Date.now();
-    for(const k of Object.keys(deadHosts)) delete deadHosts[k];
+  }
+  else if(m.t==='host' && isHost){
+    // TWO hosts in one room — converge on one (see resolveDualHost)
+    if(fromPid && fromPid!==myId) resolveDualHost(fromPid);
   }
 }
 function hostLeft(){
@@ -1372,7 +1402,7 @@ function hostLeft(){
   setNetStatus('🤖 Host left — bots took over the arena.', 'bots');
   toast('⚠️ Host left — bots took over!');
   $('lobby').classList.add('hidden');
-  if(state!=='playing'){ state='menu'; $('menu').classList.remove('hidden'); }
+  if(state!=='playing'){ $('gameover').classList.add('hidden'); state='menu'; $('menu').classList.remove('hidden'); }
 }
 
 /* ============================================================
@@ -1483,15 +1513,24 @@ function promoteToHost(){
     showLobby(); renderLobby();
     return;
   }
+  // if my game-over panel is up, remember exactly what was visible
+  // so the rebuild cannot change the frozen picture behind it
+  const frozenVis = state==='over' ? new Map(allSnakes().map(s=>[s, [s.mesh.visible, s.headGroup.visible]])) : null;
   rebuildSimFromSnapshot();
+  if(frozenVis){
+    for(const s of allSnakes()){
+      const v=frozenVis.get(s);
+      if(v){ s.mesh.visible=v[0]; s.headGroup.visible=v[1]; }
+      else { s.mesh.count=0; s.glow.count=0; s.shine.count=0; }   // newly learned snake: draw nothing until I play again
+    }
+  }
   pendingDeaths=[]; snapTimer=0; inputTimer=0;
   if(state==='over'){
-    // I was dead, waiting on PLAY AGAIN — step back in as the new
-    // host with a fresh snake; the room never stopped for anyone else
-    resetSnakePos(player, 0, 18, -Math.PI/2, 12);
-    state='playing';
-    $('gameover').classList.add('hidden');
-    $('hud').classList.remove('hidden'); $('board').classList.remove('hidden');
+    // I was dead, waiting on PLAY AGAIN: I take over as host so the
+    // ROOM keeps living for everyone else (animate() runs the host
+    // sim — hostDeadSim), but MY screen stays frozen on the
+    // game-over panel and my snake stays dead until I press
+    // PLAY AGAIN, which takes the normal host-respawn path.
   }
   // claim the Quick Match directory row so the arena stays findable
   if(qm.rowId){ qm.phase='hosting'; quickMatchHost=true; myRowUpdate({status:'open', room_code:Net.roomCode, host_id:myId, map:'arena-'+arenaNo}); }
@@ -1517,6 +1556,40 @@ function onHostLost(reason){
   const w=lobbyPlayers.find(p=>p.id===winnerId);
   netDebug('host migrated to '+(w?w.name:winnerId));
 }
+/* Become a plain client of newHostId: the snakes I was simulating
+   turn into snapshot-driven remotes, gliding from exactly where
+   they are. Shared by host handover and dual-host step-down. */
+function stepDownToClient(newHostId){
+  isHost=false; currentHostId=newHostId; lastHostMsgAt=Date.now();
+  for(const b of [...bots]){
+    const i=bots.indexOf(b); if(i>=0) bots.splice(i,1);
+    b.remote=true; b.netIn=null; b.snapX=b.x; b.snapZ=b.z; b.snapA=b.angle;
+    if(!remotes.find(r=>r.id===b.id)) remotes.push(b);
+  }
+  for(const r of remotes){ r.snapX=r.x; r.snapZ=r.z; r.snapA=r.angle; }
+  botsInArena=false;
+}
+let lastHostClaimAt = 0;
+/* TWO hosts broadcasting into one room = the scene strobes between
+   two simulations. Converge deterministically: both duelists hold
+   the same roster, so both pick the SAME winner — the earlier
+   joiner (tie: smaller id). The loser steps down to client; the
+   winner re-claims (throttled) so the loser hears it. */
+function resolveDualHost(otherId){
+  if(!isHost || !otherId || otherId===myId) return;
+  const ia=lobbyPlayers.findIndex(p=>p.id===myId), ib=lobbyPlayers.findIndex(p=>p.id===otherId);
+  let winner;
+  if(ia>=0 && ib>=0) winner = ia<ib ? myId : otherId;
+  else if(ia>=0) winner = myId;
+  else if(ib>=0) winner = otherId;
+  else winner = myId<otherId ? myId : otherId;
+  if(winner===otherId){ stepDownToClient(otherId); netDebug('dual host — stepped down for '+otherId); }
+  else if(Date.now()-lastHostClaimAt>1000){
+    lastHostClaimAt=Date.now();
+    netSendAll({t:'host', name:myName});
+    netSendAll(buildSnapshot());
+  }
+}
 /* I am the host and I just DIED: hand authority over BEFORE anyone
    notices, then carry on as an ordinary client — my PLAY AGAIN
    rejoins this same room through the normal join-hello path and I
@@ -1530,16 +1603,9 @@ function initiateHostHandover(){
   netSendAll(buildSnapshot());            // final snapshot — carries my death in deaths[]
   netSendTo(winnerId, {t:'promote'});
   netSendTo(winnerId, {t:'promote'});     // sent twice; the silence watchdog is the third safety net
-  // become a plain client: the snakes I was simulating turn into
-  // snapshot-driven remotes, gliding from exactly where they are
-  isHost=false; currentHostId=winnerId; lastHostMsgAt=Date.now();
-  for(const b of [...bots]){
-    const i=bots.indexOf(b); if(i>=0) bots.splice(i,1);
-    b.remote=true; b.netIn=null; b.snapX=b.x; b.snapZ=b.z; b.snapA=b.angle;
-    if(!remotes.find(r=>r.id===b.id)) remotes.push(b);
-  }
-  for(const r of remotes){ r.snapX=r.x; r.snapZ=r.z; r.snapA=r.angle; }
-  botsInArena=false;
+  // become a plain client of the successor (shared with dual-host
+  // step-down): my simulated snakes turn into snapshot-driven remotes
+  stepDownToClient(winnerId);
   netDebug('host migrated to '+(w?w.name:winnerId));
 }
 
@@ -1557,10 +1623,21 @@ function applySnapshot(m){
   lastSnap=m;   // kept whole: if this host vanishes, the successor rebuilds the sim from this
   if(m.an) arenaNo=m.an;
   if(m.ac) arenaCountFromHost=m.ac;
+  // DEAD = FROZEN VIEW: while my game-over panel is up, a snapshot is
+  // only BOOKKEPT (lastSnap above — a promotion rebuilds the room
+  // from it). It must NOT repaint the scene behind the panel, and no
+  // '💥 X crashed!' toast may fire over the panel. PLAY AGAIN takes
+  // the normal rejoin path and restarts this client fresh.
+  if(state==='over') return;
   // orbs: host is the source of truth
   orbs.length=0;
   for(const o of (m.orbs||[])){
-    orbs.push({x:o[0], z:o[1], value:o[2], color:o[3], phase:Math.random()*TAU, size:o[2]>=5?1.5:o[2]>=3?1.15:0.85});
+    /* phase MUST be stable for a given orb: refreshOrbs bobs/pulses
+       every orb by sin(t + phase), so a fresh RANDOM phase on every
+       snapshot (10x/sec) made the whole orb field strobe — the
+       2-player "screen flicker". Derive it from the position. */
+    const ph=((o[0]*12.9898 + o[1]*78.233) % TAU + TAU) % TAU;
+    orbs.push({x:o[0], z:o[1], value:o[2], color:o[3], phase:ph, size:o[2]>=5?1.5:o[2]>=3?1.15:0.85});
   }
   for(const d of (m.deaths||[])){
     if(d.id===myId && player.alive){
@@ -2001,27 +2078,42 @@ function animate(){
   requestAnimationFrame(animate);
   const dt=Math.min(clock.getDelta(), 0.05);
   const t=clock.elapsedTime;
-  wallRing.rotation.z += dt*0.15;
-  wallRing2.rotation.z -= dt*0.1;
-  wallCyl.material.opacity = 0.10 + 0.05*Math.sin(t*2);
-  refreshOrbs(t);
+  /* DEAD = FROZEN FRAME: while the game-over panel is up, nothing on
+     this screen may move — no wall spin, no orb bob/pulse, no
+     particle drift — until PLAY AGAIN / Back to Menu. (If I am the
+     host, the simulation below still runs so the room lives on for
+     the other players; only this view is frozen.) */
+  const frozenView = state==='over';
+  if(!frozenView){
+    wallRing.rotation.z += dt*0.15;
+    wallRing2.rotation.z -= dt*0.1;
+    wallCyl.material.opacity = 0.10 + 0.05*Math.sin(t*2);
+    refreshOrbs(t);
+  }
   /* keep the arena stocked at the balanced orb level (host/offline
      simulate orbs; online clients receive them in snapshots) */
   if((netMode!=='online' || isHost) && orbs.length<ORB_TARGET){
     spawnOrb(); if(orbs.length<ORB_TARGET-12) spawnOrb();
   }
-  updateParts(dt);
+  if(!frozenView) updateParts(dt);
   if(player && player.skinDef && (player.skinDef.pattern==='rainbow' || player.skinDef.pattern==='flame')){
     rainbowTimer+=dt;
     const step = player.skinDef.pattern==='flame' ? 0.09 : 0.07;
     if(rainbowTimer>step){ rainbowTimer=0; rainbowOff=(rainbowOff+0.025)%1; flameShift=(flameShift+1)%8; paintSnake(player); }
   }
   for(const b of bursts){ if(b.life>0){ b.life-=dt*1.8; b.mesh.scale.addScalar(dt*14); b.mesh.material.opacity=Math.max(0,b.life*0.8); if(b.life<=0) b.mesh.visible=false; } }
-  if(state==='playing' && player){
-    elapsed+=dt;
-    keySteer();
-    player.boost = boostBtnHeld || mouseDown || keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
-    if(player.boost && Math.random()<dt*2) sfx.boost();
+  /* hostDeadSim: I died but I am (again) the host — keep simulating
+     the room for everyone else while MY screen stays frozen on the
+     game-over panel: my snake is not moved, no mesh is repainted,
+     the camera never follows. PLAY AGAIN respawns me as host. */
+  const hostDeadSim = state==='over' && netMode==='online' && isHost && !!player;
+  if((state==='playing' || hostDeadSim) && player){
+    if(state==='playing'){
+      elapsed+=dt;
+      keySteer();
+      player.boost = boostBtnHeld || mouseDown || keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
+      if(player.boost && Math.random()<dt*2) sfx.boost();
+    }
     if(netMode==='online' && !isHost){
       // ---- CLIENT: predict my own movement; the host decides everything else
       inputTimer+=dt;
@@ -2044,16 +2136,18 @@ function animate(){
       }
     } else {
       // ---- OFFLINE or HOST: full authoritative simulation
-      moveSnake(player, dt);
-      updateSnakeMesh(player, t);
-      eatCheck(player);
-      const hit= headHits(player);
-      if(hit) killSnake(player, hit);
+      if(state==='playing'){
+        moveSnake(player, dt);
+        updateSnakeMesh(player, t);
+        eatCheck(player);
+        const hit= headHits(player);
+        if(hit) killSnake(player, hit);
+      }
       for(const b of bots){
         if(!b.alive){ b.respawnIn-=dt; if(b.respawnIn<=0) respawnBot(b); continue; }
         botThink(b, dt);
         moveSnake(b, dt);
-        updateSnakeMesh(b, t);
+        if(hostDeadSim) refreshSegPos(b); else updateSnakeMesh(b, t);
         eatCheck(b);
         const bh=headHits(b);
         if(bh) killSnake(b, bh==='wall'?'wall':(bh==='YOU'?'YOU':'bot'));
@@ -2063,7 +2157,7 @@ function animate(){
           if(!r.alive) continue;
           if(r.netIn){ r.targetAngle=r.netIn.a; r.boost=!!r.netIn.b; }
           moveSnake(r, dt);
-          updateSnakeMesh(r, t);
+          if(hostDeadSim) refreshSegPos(r); else updateSnakeMesh(r, t);
           eatCheck(r);
           const rh=headHits(r);
           if(rh) killSnake(r, rh==='wall'?'wall':(rh==='YOU'?'YOU':rh));
@@ -2072,17 +2166,19 @@ function animate(){
         if(snapTimer>=0.1){ snapTimer=0; netSendAll(buildSnapshot()); }
       }
     }
-    if(player.boost && player.alive){ emitPart(player.x, 0.6, player.z, player.colorHex); emitPart(player.x, 0.6, player.z, 0xffffff); }
-    for(const b of bots) if(b.alive && b.boost) emitPart(b.x, 0.6, b.z, b.colorHex);
-    const camH = 24 + Math.min(10, player.length*0.07), camD = 13 + Math.min(5, player.length*0.035);
-    camera.position.x += (player.x-camera.position.x)*Math.min(1,dt*4);
-    camera.position.y += (camH-camera.position.y)*Math.min(1,dt*4);
-    camera.position.z += ((player.z+camD)-camera.position.z)*Math.min(1,dt*4);
-    camera.lookAt(player.x, 0, player.z - 3);
-    const targetFov = player.boost ? 64 : 58;
-    if(Math.abs(camera.fov-targetFov)>0.05){ camera.fov += (targetFov-camera.fov)*Math.min(1,dt*5); camera.updateProjectionMatrix(); }
-    headLight.position.set(player.x, 3, player.z);
-    hudTimer+=dt; if(hudTimer>0.12){ hudTimer=0; updateHUD(); }
+    if(state==='playing'){
+      if(player.boost && player.alive){ emitPart(player.x, 0.6, player.z, player.colorHex); emitPart(player.x, 0.6, player.z, 0xffffff); }
+      for(const b of bots) if(b.alive && b.boost) emitPart(b.x, 0.6, b.z, b.colorHex);
+      const camH = 24 + Math.min(10, player.length*0.07), camD = 13 + Math.min(5, player.length*0.035);
+      camera.position.x += (player.x-camera.position.x)*Math.min(1,dt*4);
+      camera.position.y += (camH-camera.position.y)*Math.min(1,dt*4);
+      camera.position.z += ((player.z+camD)-camera.position.z)*Math.min(1,dt*4);
+      camera.lookAt(player.x, 0, player.z - 3);
+      const targetFov = player.boost ? 64 : 58;
+      if(Math.abs(camera.fov-targetFov)>0.05){ camera.fov += (targetFov-camera.fov)*Math.min(1,dt*5); camera.updateProjectionMatrix(); }
+      headLight.position.set(player.x, 3, player.z);
+      hudTimer+=dt; if(hudTimer>0.12){ hudTimer=0; updateHUD(); }
+    }
   } else if(state==='menu' && player){
     const a=t*0.12;
     camera.position.set(Math.cos(a)*34, 26, Math.sin(a)*34);
