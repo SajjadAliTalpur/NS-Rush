@@ -857,7 +857,10 @@ function killSnake(s, cause){
       ? 'You smashed into the neon wall!'
       : 'You crashed into ' + (cause||'another snake') + '!';
     $('newBest').classList.toggle('hidden', !(isBestLen||isBestScore));
-    if(netMode==='online' && isHost) netSendAll({t:'end'});
+    // NOTE: the host's own death does NOT end the room — no 'end' is
+    // sent here. PLAY AGAIN respawns the host in place and clients see
+    // it alive again via snapshots. 'end' is sent only when the host
+    // actually leaves (menu button / offline PLAY AGAIN path).
     setTimeout(()=>{ $('gameover').classList.remove('hidden'); $('hud').classList.add('hidden'); $('board').classList.add('hidden'); }, 650);
   } else {
     sfx.botDie();
@@ -1895,6 +1898,14 @@ function startGame(opts){
       if(p.id===myId) continue;
       addRemote(p.id, p.name, p.color);
     }
+    // Rebuild the roster (self + everyone in the room). buildSnapshot's
+    // player count, the header badge and the rivals toast all read this
+    // list — wiping it at match start made every count read 1 player.
+    lobbyPlayers=[{id:myId, name:myName, color:skinColor, host:isHost}];
+    for(const p of list){
+      if(p.id===myId) continue;
+      if(!lobbyPlayers.find(x=>x.id===p.id)) lobbyPlayers.push({id:p.id, name:p.name, color:p.color, host:false});
+    }
     orbs.length=0; for(let i=0;i<ORB_TARGET;i++) spawnOrb();
     setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+(remotes.length+1)+'/'+ARENA_MAX+' players', 'online');
     toast('🌐 ONLINE! '+remotes.length+' real rival'+(remotes.length===1?'':'s')+' in the arena!');
@@ -1936,14 +1947,56 @@ $('cancelLobbyBtn').addEventListener('click', ()=>{
   $('lobby').classList.add('hidden'); $('menu').classList.remove('hidden');
   mmStatus('');
 });
+let rejoinSeq = 0;   // guards the client PLAY AGAIN rejoin timers below
 $('againBtn').addEventListener('click', ()=>{
   sfx.click();
+  if(netMode==='online' && isHost){
+    // HOST rejoin: stay in the room — respawn ONLY my own snake in
+    // place. Channel, remotes and lobbyPlayers stay untouched; the
+    // next snapshots show me alive again and clients restore my
+    // snake from the snapshot alive flag.
+    readName();
+    player.name=myName; player.colorHex=skinColor; player.skinDef=skinDef; player.id=myId;
+    resetSnakePos(player, 0, 18, -Math.PI/2, 12);
+    elapsed=0; snapTimer=0;
+    state='playing';
+    $('gameover').classList.add('hidden');
+    $('hud').classList.remove('hidden'); $('board').classList.remove('hidden');
+    camera.position.set(player.x, 26, player.z+14);
+    setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+Math.max(1, lobbyPlayers.length)+'/'+ARENA_MAX+' players', 'online');
+    toast('🌐 Back in Arena '+arenaNo+' — same room, fresh snake!');
+    updateHUD();
+    return;
+  }
+  if(netMode==='online' && !isHost && rtChannel){
+    // CLIENT rejoin: stay on the SAME channel and say hello again —
+    // the host's late-join path answers with a fresh 'start' carrying
+    // the full players list, which restarts this client in the room.
+    const seq=++rejoinSeq;
+    $('gameover').classList.add('hidden');
+    setNetStatus('🌐 Rejoining Arena '+arenaNo+'…', 'online');
+    sendJoinHello();
+    setTimeout(()=>{ if(rejoinSeq===seq && state!=='playing' && netMode==='online' && !isHost) sendJoinHello(); }, 2000);
+    setTimeout(()=>{
+      if(rejoinSeq!==seq || state==='playing' || netMode!=='online' || isHost) return;
+      // no 'start' reply in ~5s — the room is gone: fresh Quick Match
+      netDebug('rejoin timed out arena '+arenaNo+' — fresh Quick Match');
+      cleanupNet();
+      setNetStatus(null);
+      state='menu'; $('menu').classList.remove('hidden');
+      startQuickMatch();
+    }, 5000);
+    return;
+  }
+  // offline (incl. host already left, so netMode is 'offline'): unchanged
   if(netMode==='online' && isHost) netSendAll({t:'end'}); // let clients fall back to bots
   cleanupNet();
   startGame({mode:'bots'});
 });
 $('menuBtn').addEventListener('click', ()=>{
-  sfx.click(); cleanupNet(); state='menu';
+  sfx.click();
+  if(netMode==='online' && isHost) netSendAll({t:'end'}); // host is leaving: clients fall back to bots
+  cleanupNet(); state='menu';
   $('gameover').classList.add('hidden'); $('menu').classList.remove('hidden');
   $('hud').classList.add('hidden'); $('board').classList.add('hidden'); $('arenaBadge').classList.add('hidden');
   setNetStatus(null); initSnakes(); // restore the menu-background bots
