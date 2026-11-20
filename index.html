@@ -31,7 +31,12 @@
   .icon-btn:active{transform:scale(.92)}
   #minimap{border-radius:12px;border:1px solid rgba(0,255,200,.35);background:rgba(8,12,34,.72)}
   /* ---------- Leaderboard ---------- */
-  #board{position:fixed;top:86px;right:14px;width:190px;background:rgba(8,12,34,.72);border:1px solid rgba(255,0,170,.35);border-radius:14px;padding:10px 12px;z-index:10;backdrop-filter:blur(6px)}
+  /* Leaderboard sits BELOW the minimap, never on top of it: the
+     right HUD column is 12px padding + 42px buttons + 8px gap +
+     130px minimap = ends at ~192px, so the board starts at 204px.
+     max-height keeps it on screen (scrolling internally) on short
+     windows instead of running over the boost button / off-screen. */
+  #board{position:fixed;top:204px;right:14px;width:190px;max-height:calc(100vh - 218px);overflow-y:auto;background:rgba(8,12,34,.72);border:1px solid rgba(255,0,170,.35);border-radius:14px;padding:10px 12px;z-index:10;backdrop-filter:blur(6px)}
   #board h3{font-family:'Orbitron',monospace;font-size:12px;letter-spacing:2px;color:#ff7ad9;margin-bottom:6px}
   #board ol{list-style:none}
   #board li{display:flex;justify-content:space-between;font-size:13px;padding:3px 2px;color:#cfe6ff}
