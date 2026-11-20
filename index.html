@@ -858,9 +858,10 @@ function killSnake(s, cause){
       : 'You crashed into ' + (cause||'another snake') + '!';
     $('newBest').classList.toggle('hidden', !(isBestLen||isBestScore));
     // NOTE: the host's own death does NOT end the room — no 'end' is
-    // sent here. PLAY AGAIN respawns the host in place and clients see
-    // it alive again via snapshots. 'end' is sent only when the host
-    // actually leaves (menu button / offline PLAY AGAIN path).
+    // sent here. Authority hands over to the next player (see the end
+    // of this function) and PLAY AGAIN rejoins me as a client. 'end'
+    // is sent only when the host actually leaves (menu button), and
+    // even then the clients migrate to a new host instead of dying.
     setTimeout(()=>{ $('gameover').classList.remove('hidden'); $('hud').classList.add('hidden'); $('board').classList.add('hidden'); }, 650);
   } else {
     sfx.botDie();
@@ -869,6 +870,10 @@ function killSnake(s, cause){
       player.kills++; player.score+=25; toast('💥 +25  You killed '+s.name+'!');
     }
   }
+  // HOST DEATH = HANDOVER, not the end of the room: if I was the
+  // host, authority passes to the next player right now and I carry
+  // on as an ordinary client (see initiateHostHandover).
+  if(s.isPlayer && netMode==='online' && isHost) initiateHostHandover();
 }
 function respawnBot(b){
   const a=Math.random()*TAU;
@@ -926,6 +931,16 @@ let rtChannel = null, rtChannelName = null, rtReady = false;
 const remoteLastSeen = {};      // host: playerId -> last join/'in' time (ghost pruning)
 let lobbyPlayers = [];          // [{id,name,color,host}]
 let netTick = 0, snapTimer = 0, inputTimer = 0, lastSnapAt = 0;
+/* ---- host migration state ----
+   currentHostId: who currently holds authority (learned from the
+   lobby roster, 'start', snapshots and 'host' claims). lastHostMsgAt:
+   last time the current host was heard from — snapshots arrive 10x/s,
+   so ~3.5s of silence means the host is gone. lastSnap: the newest
+   snapshot received, kept whole so a promoted client can rebuild the
+   ENTIRE simulation from it. deadHosts: ids already known gone, so
+   chained migration never re-elects a corpse. */
+let currentHostId = null, lastHostMsgAt = 0, lastSnap = null;
+const deadHosts = {};
 let pendingDeaths = [];         // host: [{id, cause}] since last snapshot
 let quickMatchHost = false, quickAutoJoin = false, quickJoinRetries = 0;
 let qmTimers = [];
@@ -981,6 +996,8 @@ function teardownChannel(){
   clearAloneTimer();
   leaveChannel(true);
   isHost=false; netMode='offline'; quickAutoJoin=false;
+  currentHostId=null; lastHostMsgAt=0; lastSnap=null;
+  for(const k of Object.keys(deadHosts)) delete deadHosts[k];
   for(const k of Object.keys(remoteLastSeen)) delete remoteLastSeen[k];
   for(const r of [...remotes]) removeRemote(r.id);
   lobbyPlayers=[];
@@ -1012,7 +1029,7 @@ function joinChannel(code, onReady, onError){
   const name='arena-'+code;
   const ch=sb.channel(name, {config:{broadcast:{self:false}}});
   rtChannel=ch; rtChannelName=name; rtReady=false; rtOnError=onError||null;
-  ['snap','lobby','start','full','join','in','kill','end','bye'].forEach(ev=>{
+  ['snap','lobby','start','full','join','in','kill','end','bye','promote','host'].forEach(ev=>{
     ch.on('broadcast', {event:ev}, (msg)=>{
       if(rtChannel!==ch) return;
       routeBroadcast(msg && msg.payload);
@@ -1069,6 +1086,7 @@ function startHost(code, opts){
   isHost = true; netMode='online'; quickMatchHost = autoStart||quickArena;
   arenaNo = opts.arena || 1;
   myId = netPlayerId();
+  currentHostId = myId;
   mmStatus('🔗 Opening channel arena-'+Net.roomCode+'…');
   netDebug('host opening channel arena-'+Net.roomCode+' arena '+arenaNo);
   joinChannel(Net.roomCode, ()=>{
@@ -1234,11 +1252,34 @@ setInterval(()=>{
   }
 }, 2000);
 
+/* ---- host-migration watchdog ----
+   While playing, the host's snapshots arrive 10x/s; in the lobby the
+   host rebroadcasts the roster every second as a heartbeat. ~3.5s of
+   silence from the current host therefore means it is GONE (tab
+   closed, network died, no 'bye' ever arrived) — the room elects
+   the next host deterministically and carries on. The host side of
+   this same tick is just the lobby heartbeat. */
+setInterval(()=>{
+  if(netMode!=='online' || !rtReady) return;
+  if(isHost){
+    if(state!=='playing') netSendAll({t:'lobby', players:lobbyPlayers, arena:arenaNo});
+    return;
+  }
+  const inLobby = !$('lobby').classList.contains('hidden');
+  if(state!=='playing' && !inLobby) return;
+  if(!currentHostId || !lastHostMsgAt) return;
+  if(Date.now()-lastHostMsgAt > 3500) onHostLost('timeout');
+}, 1000);
+
 /* ---- network messages ---- */
 function netSendAll(msg){ rtSend(msg, null); }
 function netSendTo(id, msg){ rtSend(msg, id); }
 function handleNet(m, fromPid){
   if(!m || !m.t) return;
+  // host liveness: any word from the current host resets the
+  // migration watchdog; a snapshot's sender IS the host by definition
+  if(fromPid && currentHostId && fromPid===currentHostId) lastHostMsgAt=Date.now();
+  if(m.t==='s' && fromPid){ if(!currentHostId) currentHostId=fromPid; lastHostMsgAt=Date.now(); }
   if(m.t==='join' && isHost){
     // ARENA CAP: max 10 real players per arena/scene — a joiner who
     // finds this arena full is told so and hops to the next arena.
@@ -1266,6 +1307,8 @@ function handleNet(m, fromPid){
   }
   else if(m.t==='lobby' && !isHost){
     lobbyPlayers=m.players||[];
+    const lh=lobbyPlayers.find(p=>p.host);
+    if(lh) currentHostId=lh.id;
     if(m.arena) arenaNo=m.arena;
     if(state==='playing'){ arenaCountFromHost=lobbyPlayers.length; return; }
     showLobby();
@@ -1273,6 +1316,7 @@ function handleNet(m, fromPid){
     renderLobby();
   }
   else if(m.t==='start' && !isHost){
+    if(fromPid) currentHostId=fromPid;
     if(m.arena) arenaNo=m.arena;
     arenaCountFromHost=(m.players||[]).length || arenaCountFromHost;
     qmMarkJoined();
@@ -1286,8 +1330,9 @@ function handleNet(m, fromPid){
     const rs=remotes.find(r=>r.id===fromPid);
     if(rs && rs.alive){ rs.netIn={a:m.a, b:m.b?1:0, at:Date.now()}; }
   }
-  else if(m.t==='bye' && isHost){
-    hostRemovePlayer(fromPid);
+  else if(m.t==='bye'){
+    if(isHost) hostRemovePlayer(fromPid);
+    else if(fromPid && fromPid===currentHostId) onHostLost('bye');
   }
   else if(m.t==='s' && !isHost){
     applySnapshot(m);
@@ -1296,7 +1341,21 @@ function handleNet(m, fromPid){
     if(m.killer===myId){ player.kills++; player.score+=25; toast('💥 +25  You killed '+m.victimName+'!'); }
   }
   else if(m.t==='end' && !isHost){
-    hostLeft();
+    // the host is leaving — the room does NOT die with it: authority
+    // migrates to the next player (bot takeover is only the last
+    // resort inside onHostLost, when nobody is left to elect)
+    onHostLost('end');
+  }
+  else if(m.t==='promote' && !isHost){
+    // the dying host picked me as its successor
+    promoteToHost();
+  }
+  else if(m.t==='host' && !isHost){
+    // a new host claimed the room — follow it seamlessly
+    if(fromPid && fromPid!==currentHostId) netDebug('host migrated to '+(m.name||'new host'));
+    if(fromPid) currentHostId=fromPid;
+    lastHostMsgAt=Date.now();
+    for(const k of Object.keys(deadHosts)) delete deadHosts[k];
   }
 }
 function hostLeft(){
@@ -1316,6 +1375,174 @@ function hostLeft(){
   if(state!=='playing'){ state='menu'; $('menu').classList.remove('hidden'); }
 }
 
+/* ============================================================
+   HOST MIGRATION — the room never dies with its host
+   Supabase Realtime is only a message channel (no game server),
+   so a truly hostless room is impossible — instead, authority
+   MOVES. Election is deterministic: every client holds the same
+   lobbyPlayers list in join order (the host broadcasts it on every
+   change), so every client independently picks the SAME successor
+   — earliest-joined remaining player, alive players first, ties
+   broken by smallest player id — with no voting round-trip. The
+   successor rebuilds the whole simulation from the last snapshot
+   it received (snakes, orbs, bots, scores, tick) and resumes
+   broadcasting at the same 10/s rate, so play continues with no
+   reset, no banner and no rejoin. The only trace is one
+   netDebug() line.
+   ============================================================ */
+function snapAlive(id){
+  if(id===myId) return !!(player && player.alive);
+  if(!lastSnap || !lastSnap.sn) return true;
+  const e=lastSnap.sn.find(x=>x[0]===id);
+  return e ? !!e[6] : true;
+}
+function electHostId(exclude){
+  const ex=exclude||{};
+  const cands=[];
+  lobbyPlayers.forEach((p,i)=>{ if(p && p.id && !ex[p.id]) cands.push({id:p.id, idx:i}); });
+  if(!cands.length) return null;
+  cands.sort((a,b)=>{
+    const ea=snapAlive(a.id)?0:1, eb=snapAlive(b.id)?0:1;
+    if(ea!==eb) return ea-eb;                    // a living host keeps the game flowing
+    if(a.idx!==b.idx) return a.idx-b.idx;        // earliest join wins
+    return a.id<b.id ? -1 : a.id>b.id ? 1 : 0;   // deterministic tie-break
+  });
+  return cands[0].id;
+}
+function rebuildHistory(s, x, z, a){
+  s.history=[];
+  for(let i=0;i<400;i++) s.history.push({x:x-Math.cos(a)*i*0.35, z:z-Math.sin(a)*i*0.35});
+}
+/* Rebuild the authoritative simulation from the last snapshot this
+   client received: same snakes at the same spots with the same
+   lengths/scores, the same orb field (already mirrored in `orbs`),
+   the same filler bots — now driven by MY bot AI — and the tick
+   continuing where the old host left off. */
+function rebuildSimFromSnapshot(){
+  const snap=lastSnap;
+  if(snap && typeof snap.tick==='number') netTick=snap.tick;
+  if(!snap || !snap.sn) return;
+  const seen={};
+  let hadBots=false;
+  for(const e of snap.sn){
+    const id=e[0], x=e[1], z=e[2], a=e[3], len=e[4], sc=e[5], al=!!e[6], name=e[7], col=e[8], isBot=!!e[9];
+    seen[id]=1;
+    if(id===myId){
+      player.score=sc;
+      if(player.alive){
+        player.length=len;
+        if(Math.hypot(x-player.x, z-player.z)>3){ player.x=x; player.z=z; player.angle=a; player.targetAngle=a; rebuildHistory(player,x,z,a); }
+      }
+      continue;
+    }
+    let s=remotes.find(r=>r.id===id) || bots.find(b=>b.id===id);
+    if(!s) s=addRemote(id, name, col);
+    s.name=name; s.colorHex=col; s.score=sc; s.length=len;
+    s.x=x; s.z=z; s.angle=a; s.targetAngle=a;
+    rebuildHistory(s,x,z,a);
+    s.alive=al; s.mesh.visible=al; s.headGroup.visible=al;
+    if(isBot){
+      hadBots=true;
+      const ri=remotes.indexOf(s); if(ri>=0) remotes.splice(ri,1);
+      if(!bots.includes(s)){ s.remote=false; s.bot=true; s.netIn=null; if(!al) s.respawnIn=3; bots.push(s); }
+    } else {
+      if(!remotes.includes(s)){ const bi=bots.indexOf(s); if(bi>=0) bots.splice(bi,1); s.remote=true; s.bot=false; remotes.push(s); }
+      s.netIn={a:a, b:0, at:Date.now()};
+      remoteLastSeen[id]=Date.now();
+    }
+  }
+  botsInArena=hadBots;
+  // drop remotes the old host no longer had (but never anyone the
+  // roster still lists — a join may have raced the last snapshot)
+  for(const r of [...remotes]){
+    if(!seen[r.id] && !lobbyPlayers.find(p=>p.id===r.id)) removeRemote(r.id);
+  }
+}
+function promoteToHost(){
+  if(isHost || netMode!=='online') return;
+  const deadIds={};
+  for(const k of Object.keys(deadHosts)) deadIds[k]=1;
+  if(currentHostId && currentHostId!==myId) deadIds[currentHostId]=1;
+  isHost=true; currentHostId=myId;
+  for(const k of Object.keys(deadHosts)) delete deadHosts[k];
+  // roster: gone hosts out, crown myself, keep the join order; make
+  // sure every real player in the last snapshot is on it
+  lobbyPlayers=lobbyPlayers.filter(p=>p && p.id && !deadIds[p.id]);
+  if(lastSnap && lastSnap.sn){
+    for(const e of lastSnap.sn){
+      if(!e[9] && e[0]!==myId && !lobbyPlayers.find(p=>p.id===e[0]))
+        lobbyPlayers.push({id:e[0], name:e[7], color:e[8], host:false});
+    }
+  }
+  if(!lobbyPlayers.find(p=>p.id===myId)) lobbyPlayers.push({id:myId, name:myName, color:skinColor, host:true});
+  lobbyPlayers.forEach(p=>{ p.host = p.id===myId; });
+  netSendAll({t:'host', name:myName});
+  netDebug('host migrated to '+myName);
+  if(state!=='playing' && state!=='over'){
+    // the room was still in its lobby — just take over the lobby
+    showLobby(); renderLobby();
+    return;
+  }
+  rebuildSimFromSnapshot();
+  pendingDeaths=[]; snapTimer=0; inputTimer=0;
+  if(state==='over'){
+    // I was dead, waiting on PLAY AGAIN — step back in as the new
+    // host with a fresh snake; the room never stopped for anyone else
+    resetSnakePos(player, 0, 18, -Math.PI/2, 12);
+    state='playing';
+    $('gameover').classList.add('hidden');
+    $('hud').classList.remove('hidden'); $('board').classList.remove('hidden');
+  }
+  // claim the Quick Match directory row so the arena stays findable
+  if(qm.rowId){ qm.phase='hosting'; quickMatchHost=true; myRowUpdate({status:'open', room_code:Net.roomCode, host_id:myId, map:'arena-'+arenaNo}); }
+  if(remotes.length===0) startAloneTimer();   // alone now: bots may fill, as before
+  setNetStatus('🌐 ONLINE · Arena '+arenaNo+' · '+Math.max(1, lobbyPlayers.length)+'/'+ARENA_MAX+' players', 'online');
+  netSendAll(buildSnapshot());
+  [400, 1200].forEach(ms=>setTimeout(()=>{ if(isHost && netMode==='online') netSendAll({t:'host', name:myName}); }, ms));
+}
+/* The current host is gone (it left, closed its tab, or went
+   silent). Elect the successor from the shared roster — if that is
+   me, take over now; if it is someone else, expect their snapshots
+   (the watchdog re-runs this if they never show, chaining the
+   election to the next player in line). Only when NOBODY is left
+   to elect does the old bot takeover fire, as a last resort. */
+function onHostLost(reason){
+  if(netMode!=='online' || isHost) return;
+  if(currentHostId) deadHosts[currentHostId]=1;
+  const winnerId=electHostId(deadHosts);
+  if(!winnerId){ hostLeft(); return; }
+  if(winnerId===myId){ promoteToHost(); return; }
+  currentHostId=winnerId;
+  lastHostMsgAt=Date.now();   // grace period for the successor to spin up
+  const w=lobbyPlayers.find(p=>p.id===winnerId);
+  netDebug('host migrated to '+(w?w.name:winnerId));
+}
+/* I am the host and I just DIED: hand authority over BEFORE anyone
+   notices, then carry on as an ordinary client — my PLAY AGAIN
+   rejoins this same room through the normal join-hello path and I
+   respawn as a client, never as host again. If nobody else is in
+   the room, there is nobody to hand to: I stay host and the usual
+   host PLAY AGAIN respawn applies. */
+function initiateHostHandover(){
+  const winnerId=electHostId({[myId]:1});
+  if(!winnerId) return;
+  const w=lobbyPlayers.find(p=>p.id===winnerId);
+  netSendAll(buildSnapshot());            // final snapshot — carries my death in deaths[]
+  netSendTo(winnerId, {t:'promote'});
+  netSendTo(winnerId, {t:'promote'});     // sent twice; the silence watchdog is the third safety net
+  // become a plain client: the snakes I was simulating turn into
+  // snapshot-driven remotes, gliding from exactly where they are
+  isHost=false; currentHostId=winnerId; lastHostMsgAt=Date.now();
+  for(const b of [...bots]){
+    const i=bots.indexOf(b); if(i>=0) bots.splice(i,1);
+    b.remote=true; b.netIn=null; b.snapX=b.x; b.snapZ=b.z; b.snapA=b.angle;
+    if(!remotes.find(r=>r.id===b.id)) remotes.push(b);
+  }
+  for(const r of remotes){ r.snapX=r.x; r.snapZ=r.z; r.snapA=r.angle; }
+  botsInArena=false;
+  netDebug('host migrated to '+(w?w.name:winnerId));
+}
+
 /* ---- snapshots (host-authoritative) ---- */
 function buildSnapshot(){
   return { t:'s', tick:++netTick,
@@ -1327,6 +1554,7 @@ function buildSnapshot(){
 }
 function applySnapshot(m){
   lastSnapAt=Date.now();
+  lastSnap=m;   // kept whole: if this host vanishes, the successor rebuilds the sim from this
   if(m.an) arenaNo=m.an;
   if(m.ac) arenaCountFromHost=m.ac;
   // orbs: host is the source of truth
@@ -1886,6 +2114,11 @@ function startGame(opts){
   netMode = mode==='online' ? 'online' : 'offline';
   arenaNo = (mode==='online' && opts.arena) ? opts.arena : 1;
   arenaCountFromHost = 0;
+  // fresh match, fresh migration state — unless I just TOOK OVER
+  // this room (promoteToHost never goes through startGame)
+  lastSnap=null; lastHostMsgAt=Date.now();
+  for(const k of Object.keys(deadHosts)) delete deadHosts[k];
+  if(isHost) currentHostId=myId;
   for(const r of [...remotes]) removeRemote(r.id);
   lobbyPlayers=[];
   if(mode==='online'){
@@ -1951,10 +2184,11 @@ let rejoinSeq = 0;   // guards the client PLAY AGAIN rejoin timers below
 $('againBtn').addEventListener('click', ()=>{
   sfx.click();
   if(netMode==='online' && isHost){
-    // HOST rejoin: stay in the room — respawn ONLY my own snake in
-    // place. Channel, remotes and lobbyPlayers stay untouched; the
-    // next snapshots show me alive again and clients restore my
-    // snake from the snapshot alive flag.
+    // HOST rejoin (only reachable when my death found NO successor —
+    // with other players present, authority already handed over and
+    // I take the client path below): stay in the room, respawn ONLY
+    // my own snake in place. Channel, remotes and lobbyPlayers stay
+    // untouched; the next snapshots show me alive again.
     readName();
     player.name=myName; player.colorHex=skinColor; player.skinDef=skinDef; player.id=myId;
     resetSnakePos(player, 0, 18, -Math.PI/2, 12);
@@ -1989,13 +2223,13 @@ $('againBtn').addEventListener('click', ()=>{
     return;
   }
   // offline (incl. host already left, so netMode is 'offline'): unchanged
-  if(netMode==='online' && isHost) netSendAll({t:'end'}); // let clients fall back to bots
+  if(netMode==='online' && isHost) netSendAll({t:'end'}); // let clients elect a new host
   cleanupNet();
   startGame({mode:'bots'});
 });
 $('menuBtn').addEventListener('click', ()=>{
   sfx.click();
-  if(netMode==='online' && isHost) netSendAll({t:'end'}); // host is leaving: clients fall back to bots
+  if(netMode==='online' && isHost) netSendAll({t:'end'}); // host is leaving: clients elect a new host and play on
   cleanupNet(); state='menu';
   $('gameover').classList.add('hidden'); $('menu').classList.remove('hidden');
   $('hud').classList.add('hidden'); $('board').classList.add('hidden'); $('arenaBadge').classList.add('hidden');
