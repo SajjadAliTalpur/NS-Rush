@@ -43,8 +43,6 @@
   .panel h1{font-family:'Orbitron',monospace;font-size:clamp(30px,7vw,52px);font-weight:900;letter-spacing:2px;background:linear-gradient(90deg,#39ff6a,#00e5ff,#ff2fb3,#ffd23d);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 30px rgba(0,229,255,.25)}
   .panel h2{font-family:'Orbitron',monospace;font-size:clamp(24px,6vw,36px);font-weight:900;color:#ff5d7a;letter-spacing:1px}
   .tagline{color:#9fd8ff;margin:10px 0 4px;font-size:15px}
-  .howto{text-align:left;margin:16px auto 6px;max-width:430px;font-size:14px;line-height:1.75;color:#cfe6ff}
-  .howto b{color:#39ff6a}.howto .k{display:inline-block;background:#1b2447;border:1px solid #3a4a7a;border-radius:6px;padding:0 7px;font-size:12px;font-family:monospace}
   .skins{display:flex;gap:10px;justify-content:center;margin:16px auto 6px;flex-wrap:wrap;max-width:430px}
   .skin{width:38px;height:38px;border-radius:50%;border:3px solid transparent;cursor:pointer;box-shadow:0 0 12px currentColor;transition:transform .15s}
   .skin.sel{border-color:#fff;transform:scale(1.15)}
@@ -124,15 +122,6 @@
   <div class="panel">
     <h1>NEON SNAKE RUSH</h1>
     <p class="tagline">A glowing 3D snake arena. Eat. Grow. Trap. Survive.</p>
-    <div class="howto">
-      🟢 <b>Eat glowing orbs</b> to grow longer &amp; score points.<br>
-      🐍 <b>Steer with your mouse</b> — on mobile, <b>touch anywhere and drag</b> to steer: steering is invisible, no joystick is shown, so the screen stays clean. <span class="k">WASD</span>/<span class="k">←↑↓→</span> also work.<br>
-      🏟 <b>Arenas:</b> max <b>10 players per arena</b> — join <b>anytime</b>, even mid-match! If an arena is full, you land in the next one (Arena 2, 3…). Your arena &amp; player count show at the top.<br>
-      🌀 <b>Your own tail is safe</b> — slither straight through it, no crash!<br>
-      ⚡ Hold <span class="k">Space</span>, mouse button or <b>BOOST</b> to sprint — it costs length!<br>
-      💥 Crash into a wall or another snake and your <b>whole body stays behind as food</b> — chunks spread along your full length, and whoever eats them <b>grows fast</b>. Feast on your rivals' remains!<br>
-      🎯 Cut in front of rivals so <b>they</b> crash into <b>you</b> — then feast on their remains!
-    </div>
     <div class="skins" id="skins"></div>
     <div class="tiny">Pick your skin — scales, flames, bunny ears, unicorn horns &amp; more! — <b id="skinName" style="color:#7ef9d2">Emerald</b></div>
     <input class="name-input" id="playerName" maxlength="14" placeholder="Your name (e.g. Sajjad)" autocomplete="off">
